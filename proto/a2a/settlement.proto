@@ -1,0 +1,160 @@
+syntax = "proto3";
+
+package beebotos.a2a.settlement;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/a2a";
+
+// Settlement and payment messages
+message SettlementMessage {
+  string settlement_id = 1;
+  string negotiation_id = 2;
+  SettlementType type = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  
+  oneof content {
+    PaymentRequest payment_request = 10;
+    PaymentAuthorization auth = 11;
+    PaymentConfirmation confirmation = 12;
+    PaymentDispute dispute = 13;
+  }
+}
+
+enum SettlementType {
+  SETTLEMENT_UNSPECIFIED = 0;
+  SETTLEMENT_REQUEST = 1;
+  SETTLEMENT_AUTH = 2;
+  SETTLEMENT_CONFIRM = 3;
+  SETTLEMENT_DISPUTE = 4;
+}
+
+// Payment request
+message PaymentRequest {
+  string invoice_id = 1;
+  string deal_id = 2;
+  PaymentAmount amount = 3;
+  string description = 4;
+  repeated PaymentItem items = 5;
+  string escrow_address = 6;
+  bytes payment_hash = 7;
+}
+
+message PaymentAmount {
+  string currency = 1;
+  string amount = 2;
+  string amount_in_base_units = 3;  // Smallest unit (e.g., wei)
+  ExchangeRate exchange_rate = 4;
+}
+
+message ExchangeRate {
+  string from_currency = 1;
+  string to_currency = 2;
+  string rate = 3;
+  google.protobuf.Timestamp valid_until = 4;
+}
+
+message PaymentItem {
+  string description = 1;
+  int32 quantity = 2;
+  string unit_price = 3;
+  string total = 4;
+}
+
+// Payment authorization
+message PaymentAuthorization {
+  string invoice_id = 1;
+  bytes signature = 2;
+  string authorized_by = 3;
+  google.protobuf.Timestamp authorized_at = 4;
+  PaymentMandate mandate = 5;
+}
+
+message PaymentMandate {
+  string mandate_id = 1;
+  string grantor = 2;
+  string grantee = 3;
+  string limit = 4;
+  string spent = 5;
+  string currency = 6;
+  google.protobuf.Timestamp valid_until = 7;
+  bytes purpose_hash = 8;
+}
+
+// Payment confirmation
+message PaymentConfirmation {
+  string invoice_id = 1;
+  string transaction_hash = 2;
+  int32 block_number = 3;
+  int32 confirmations = 4;
+  PaymentStatus status = 5;
+  google.protobuf.Timestamp confirmed_at = 6;
+}
+
+enum PaymentStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING = 1;
+  STATUS_CONFIRMED = 2;
+  STATUS_FAILED = 3;
+  STATUS_DISPUTED = 4;
+  STATUS_REFUNDED = 5;
+}
+
+// Payment dispute
+message PaymentDispute {
+  string dispute_id = 1;
+  string invoice_id = 2;
+  string raised_by = 3;
+  DisputeReason reason = 4;
+  string description = 5;
+  repeated bytes evidence_hashes = 6;
+  DisputeResolution resolution = 7;
+}
+
+enum DisputeReason {
+  REASON_UNSPECIFIED = 0;
+  REASON_NON_DELIVERY = 1;
+  REASON_QUALITY_ISSUE = 2;
+  REASON_WRONG_ITEM = 3;
+  REASON_OVERCHARGE = 4;
+}
+
+message DisputeResolution {
+  ResolutionType type = 1;
+  string resolved_by = 2;
+  string refund_amount = 3;
+  bytes resolution_hash = 4;
+  google.protobuf.Timestamp resolved_at = 5;
+}
+
+enum ResolutionType {
+  RESOLUTION_UNSPECIFIED = 0;
+  RESOLUTION_FULL_REFUND = 1;
+  RESOLUTION_PARTIAL_REFUND = 2;
+  RESOLUTION_NO_REFUND = 3;
+  RESOLUTION_REPLACEMENT = 4;
+}
+
+// Escrow state
+message EscrowState {
+  string escrow_id = 1;
+  string deal_id = 2;
+  string buyer = 3;
+  string seller = 4;
+  string amount = 5;
+  string currency = 6;
+  EscrowStatus status = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp funded_at = 9;
+  google.protobuf.Timestamp released_at = 10;
+  google.protobuf.Timestamp disputed_at = 11;
+}
+
+enum EscrowStatus {
+  ESCROW_UNSPECIFIED = 0;
+  ESCROW_PENDING = 1;
+  ESCROW_FUNDED = 2;
+  ESCROW_RELEASED = 3;
+  ESCROW_REFUNDED = 4;
+  ESCROW_DISPUTED = 5;
+}

@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brain
+  namespace: beebotos
+  labels:
+    app: brain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: brain
+  template:
+    metadata:
+      labels:
+        app: brain
+    spec:
+      containers:
+        - name: brain
+          image: beebotos/brain:v2.0.0
+          ports:
+            - containerPort: 8081
+              name: grpc
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: QDRANT_URL
+              value: "http://qdrant:6333"
+          volumeMounts:
+            - name: config
+              mountPath: config
+            - name: data
+              mountPath: data/brain
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            grpc:
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: beebotos-config
+            items:
+              - key: brain.yaml
+                path: brain.yaml
+        - name: data
+          persistentVolumeClaim:
+            claimName: brain-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brain
+  namespace: beebotos
+spec:
+  selector:
+    app: brain
+  ports:
+    - port: 8081
+      targetPort: 8081
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: brain-data
+  namespace: beebotos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

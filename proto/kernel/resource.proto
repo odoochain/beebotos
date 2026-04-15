@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package beebotos.kernel.resource;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/kernel";
+
+// Resource management protocol
+message ResourceDescriptor {
+  string resource_id = 1;
+  ResourceType type = 2;
+  ResourceState state = 3;
+  
+  // Capacity and usage
+  uint64 capacity = 4;
+  uint64 allocated = 5;
+  uint64 available = 6;
+  
+  // Attributes
+  map<string, string> attributes = 7;
+  repeated string capabilities = 8;
+  
+  // Ownership
+  string owner = 9;
+  repeated string shared_with = 10;
+  
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp expires_at = 12;
+}
+
+enum ResourceType {
+  RESOURCE_TYPE_UNSPECIFIED = 0;
+  RESOURCE_TYPE_CPU = 1;
+  RESOURCE_TYPE_MEMORY = 2;
+  RESOURCE_TYPE_STORAGE = 3;
+  RESOURCE_TYPE_NETWORK = 4;
+  RESOURCE_TYPE_GPU = 5;
+  RESOURCE_TYPE_TPU = 6;
+  RESOURCE_TYPE_LICENSE = 7;
+}
+
+enum ResourceState {
+  RESOURCE_STATE_UNSPECIFIED = 0;
+  RESOURCE_AVAILABLE = 1;
+  RESOURCE_ALLOCATED = 2;
+  RESOURCE_RESERVED = 3;
+  RESOURCE_BUSY = 4;
+  RESOURCE_OFFLINE = 5;
+}
+
+// Resource allocation request
+message ResourceRequest {
+  string request_id = 1;
+  string task_id = 2;
+  
+  message ResourceRequirement {
+    ResourceType type = 1;
+    uint64 min_amount = 2;
+    uint64 preferred_amount = 3;
+    uint64 max_amount = 4;
+    map<string, string> constraints = 5;
+    int32 priority = 6;
+  }
+  
+  repeated ResourceRequirement requirements = 3;
+  google.protobuf.Duration timeout = 4;
+  bool blocking = 5;
+}
+
+message ResourceResponse {
+  string request_id = 1;
+  bool granted = 2;
+  repeated ResourceAllocation allocations = 3;
+  string rejection_reason = 4;
+}
+
+message ResourceAllocation {
+  string allocation_id = 1;
+  string resource_id = 2;
+  ResourceType type = 3;
+  uint64 amount = 4;
+  google.protobuf.Timestamp allocated_at = 5;
+  google.protobuf.Duration duration = 6;
+}
+
+// Resource limits (cgroups style)
+message ResourceLimits {
+  string task_id = 1;
+  
+  // CPU limits
+  message CpuLimit {
+    uint64 quota_us = 1;      // CPU quota in microseconds
+    uint64 period_us = 2;     // Period in microseconds
+    uint32 shares = 3;        // CPU shares (relative weight)
+    repeated int32 cpus = 4;  // Allowed CPUs
+    repeated int32 mems = 5;  // Allowed memory nodes
+  }
+  CpuLimit cpu = 2;
+  
+  // Memory limits
+  message MemoryLimit {
+    uint64 max_bytes = 1;           // Hard limit
+    uint64 soft_limit_bytes = 2;    // Soft limit
+    uint64 swap_max_bytes = 3;      // Swap limit
+    bool oom_kill = 4;              // OOM killer enabled
+  }
+  MemoryLimit memory = 3;
+  
+  // I/O limits
+  message IoLimit {
+    uint64 read_bps = 1;
+    uint64 write_bps = 2;
+    uint64 read_iops = 3;
+    uint64 write_iops = 4;
+  }
+  IoLimit io = 4;
+  
+  // Network limits
+  message NetworkLimit {
+    uint64 ingress_bps = 1;
+    uint64 egress_bps = 2;
+    uint32 max_connections = 3;
+    repeated string allowed_ports = 4;
+  }
+  NetworkLimit network = 5;
+  
+  // PIDs limit
+  uint64 max_pids = 6;
+  
+  // File descriptor limit
+  uint64 max_fds = 7;
+}
+
+// Resource metrics
+message ResourceMetrics {
+  string resource_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  
+  // CPU metrics
+  message CpuMetrics {
+    double usage_percent = 1;
+    uint64 throttled_time_us = 2;
+    uint64 user_time_us = 3;
+    uint64 system_time_us = 4;
+  }
+  CpuMetrics cpu = 3;
+  
+  // Memory metrics
+  message MemoryMetrics {
+    uint64 used_bytes = 1;
+    uint64 cache_bytes = 2;
+    uint64 swap_used_bytes = 3;
+    uint64 page_faults = 4;
+    uint64 major_faults = 5;
+  }
+  MemoryMetrics memory = 4;
+  
+  // I/O metrics
+  message IoMetrics {
+    uint64 read_bytes = 1;
+    uint64 write_bytes = 2;
+    uint64 read_ops = 3;
+    uint64 write_ops = 4;
+    uint64 io_wait_us = 5;
+  }
+  IoMetrics io = 5;
+  
+  // Network metrics
+  message NetworkMetrics {
+    uint64 rx_bytes = 1;
+    uint64 tx_bytes = 2;
+    uint64 rx_packets = 3;
+    uint64 tx_packets = 4;
+    uint64 rx_dropped = 5;
+    uint64 tx_dropped = 6;
+  }
+  NetworkMetrics network = 6;
+}
+
+// Resource quota
+message ResourceQuota {
+  string namespace = 1;
+  
+  message QuotaLimit {
+    ResourceType type = 1;
+    uint64 hard_limit = 2;
+    uint64 used = 3;
+    uint64 reserved = 4;
+  }
+  
+  repeated QuotaLimit limits = 2;
+}
+
+// Resource reservation
+message ResourceReservation {
+  string reservation_id = 1;
+  string task_id = 2;
+  string resource_id = 3;
+  uint64 amount = 4;
+  google.protobuf.Timestamp reserved_at = 5;
+  google.protobuf.Duration duration = 6;
+  ReservationPriority priority = 7;
+}
+
+enum ReservationPriority {
+  PRIORITY_UNSPECIFIED = 0;
+  PRIORITY_LOW = 1;
+  PRIORITY_NORMAL = 2;
+  PRIORITY_HIGH = 3;
+  PRIORITY_CRITICAL = 4;
+}

@@ -1,0 +1,85 @@
+//! 消息列表组件
+
+use crate::webchat::ChatMessage;
+use leptos::prelude::*;
+
+/// 消息列表组件
+#[component]
+pub fn MessageList(
+    messages: Vec<ChatMessage>,
+    #[prop(optional)] streaming_content: Option<String>,
+    #[prop(optional)] is_streaming: Option<bool>,
+) -> impl IntoView {
+    let is_streaming = is_streaming.unwrap_or(false);
+
+    view! {
+        <div class="message-list">
+            <For
+                each=move || messages.clone()
+                key=|msg| msg.id.clone()
+                children=move |message| {
+                    view! {
+                        <MessageItem message=message />
+                    }
+                }
+            />
+
+            {if is_streaming {
+                view! {
+                    <StreamingMessage content=streaming_content.unwrap_or_default() />
+                }.into_any()
+            } else {
+                view! { <div /> }.into_any()
+            }}
+        </div>
+    }
+}
+
+/// 消息项组件
+#[component]
+fn MessageItem(message: ChatMessage) -> impl IntoView {
+    let is_user = matches!(message.role, crate::webchat::MessageRole::User);
+    let class = if is_user { "message user" } else { "message assistant" };
+
+    view! {
+        <div class=class>
+            <div class="message-content">
+                {message.content.clone()}
+            </div>
+            <div class="message-meta">
+                <span class="message-time">{format_timestamp(&message.timestamp)}</span>
+                {if let Some(usage) = &message.token_usage {
+                    view! {
+                        <span class="token-usage">{usage.format()}</span>
+                    }.into_any()
+                } else {
+                    view! { <div /> }.into_any()
+                }}
+            </div>
+        </div>
+    }
+}
+
+/// 流式消息组件
+#[component]
+fn StreamingMessage(content: String) -> impl IntoView {
+    view! {
+        <div class="message assistant streaming">
+            <div class="message-content">
+                {content}
+            </div>
+            <div class="streaming-indicator">
+                <span class="cursor">"▋"</span>
+            </div>
+        </div>
+    }
+}
+
+fn format_timestamp(timestamp: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+        let local = dt.with_timezone(&chrono::Local);
+        local.format("%H:%M").to_string()
+    } else {
+        timestamp.to_string()
+    }
+}

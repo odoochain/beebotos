@@ -1,0 +1,57 @@
+# BeeBotOS Agent Runtime Dockerfile
+FROM rust:1.75-slim-bookworm as builder
+
+WORKDIR /build
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    llvm \
+    clang \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY crates/agents/ ./crates/agents/
+COPY crates/core/ ./crates/core/
+COPY crates/crypto/ ./crates/crypto/
+COPY crates/wasm/ ./crates/wasm/
+COPY proto/ ./proto/
+
+# Build release binary
+RUN cargo build --release -p agents
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libllvm15 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy binary from builder
+COPY --from=builder /build/target/release/agent-runtime /usr/local/bin/
+
+# Create directories for agent workspace
+RUN mkdir -p data/agents data/logs
+
+# Create non-root user
+RUN useradd -r -s /bin/false beebotos
+RUN chown -R beebotos:beebotos /app data
+
+USER beebotos
+
+# Expose metrics port
+EXPOSE 9090
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:9090/metrics || exit 1
+
+ENTRYPOINT ["agent-runtime"]

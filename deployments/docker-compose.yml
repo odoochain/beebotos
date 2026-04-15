@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  kernel:
+    build: 
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: beebot-kernel
+    volumes:
+      - kernel-data:/app/data
+    environment:
+      - RUST_LOG=info
+      - BEE_MODE=kernel
+    networks:
+      - beebot-network
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: beebot-gateway
+    command: ./gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - BEE_KERNEL_URL=http://kernel:9000
+    depends_on:
+      - kernel
+    networks:
+      - beebot-network
+
+  beehub:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: beebot-beehub
+    command: ./beehub
+    ports:
+      - "3000:3000"
+    environment:
+      - RUST_LOG=info
+    networks:
+      - beebot-network
+
+  # Optional: Local blockchain node for testing
+  monad-local:
+    image: ghcr.io/monad-labs/monad:latest
+    container_name: monad-local
+    ports:
+      - "8545:8545"
+    command: ["--dev", "--http", "--http.addr", "0.0.0.0", "--http.port", "8545"]
+    networks:
+      - beebot-network
+    profiles:
+      - local-chain
+
+volumes:
+  kernel-data:
+
+networks:
+  beebot-network:
+    driver: bridge

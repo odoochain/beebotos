@@ -1,0 +1,45 @@
+# BeeBotOS Agent Runtime Dockerfile
+FROM rust:1.75-slim-bookworm as builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/*/Cargo.toml ./crates/*/
+COPY apps/cli/Cargo.toml ./apps/cli/
+
+COPY crates ./crates
+COPY apps ./apps
+COPY proto ./proto
+
+RUN cargo build --release -p beebotos-cli
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 beebotos
+
+WORKDIR /app
+
+COPY --from=builder /build/target/release/beebotos /usr/local/bin/
+
+RUN mkdir -p data && chown -R beebotos:beebotos data
+
+USER beebotos
+
+ENV AGENT_DATA_DIR=data
+ENV RUST_LOG=info
+
+ENTRYPOINT ["beebotos"]
+CMD ["--help"]

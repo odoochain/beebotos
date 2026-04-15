@@ -1,0 +1,26 @@
+//! CLI commands
+
+pub mod agent;
+pub mod brain;
+pub mod browser;
+pub mod chain;
+pub mod channel;
+pub mod config;
+pub mod deploy;
+pub mod doctor;
+pub mod gateway;
+pub mod security;
+pub mod setup;
+pub mod info;
+pub mod infer;
+pub mod interactive;
+pub mod logs;
+pub mod memory;
+pub mod message;
+pub mod model;
+pub mod payment;
+pub mod propose;
+pub mod session;
+pub mod skill;
+pub mod vote;
+pub mod watch;

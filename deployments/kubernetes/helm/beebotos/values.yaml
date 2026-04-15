@@ -1,0 +1,71 @@
+# Default values for BeeBotOS
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+daemon:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: beebotos/daemon
+    tag: v2.0.0
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: 512Mi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 2000m
+  persistence:
+    enabled: true
+    size: 100Gi
+  config:
+    logLevel: info
+    maxAgents: 1000
+
+gateway:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: beebotos/gateway
+    tag: v2.0.0
+    pullPolicy: IfNotPresent
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 8080
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - api.beebotos.io
+    tls:
+      enabled: true
+      secretName: beebotos-tls
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+
+postgresql:
+  enabled: true
+  auth:
+    database: beebotos
+    username: beebotos
+    password: changeme
+  primary:
+    persistence:
+      size: 50Gi
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: changeme
+  master:
+    persistence:
+      size: 10Gi

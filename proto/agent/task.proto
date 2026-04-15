@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package beebotos.agent.task;
+
+option go_package = "github.com/beebotos/beebotos/proto/agent";
+
+import "common/types.proto";
+
+message Task {
+  string id = 1;
+  string parent_id = 2;
+  string agent_id = 3;
+  string title = 4;
+  string description = 5;
+  TaskStatus status = 6;
+  TaskPriority priority = 7;
+  TaskType task_type = 8;
+  repeated TaskArtifact artifacts = 9;
+  repeated TaskHistoryEntry history = 10;
+  int64 created_at = 11;
+  int64 updated_at = 12;
+  int64 due_at = 13;
+  int64 completed_at = 14;
+  map<string, string> metadata = 15;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_CREATED = 1;
+  TASK_STATUS_PENDING = 2;
+  TASK_STATUS_WORKING = 3;
+  TASK_STATUS_INPUT_REQUIRED = 4;
+  TASK_STATUS_COMPLETED = 5;
+  TASK_STATUS_FAILED = 6;
+  TASK_STATUS_CANCELED = 7;
+}
+
+enum TaskPriority {
+  TASK_PRIORITY_UNSPECIFIED = 0;
+  TASK_PRIORITY_LOW = 1;
+  TASK_PRIORITY_MEDIUM = 2;
+  TASK_PRIORITY_HIGH = 3;
+  TASK_PRIORITY_CRITICAL = 4;
+}
+
+enum TaskType {
+  TASK_TYPE_UNSPECIFIED = 0;
+  TASK_TYPE_GENERIC = 1;
+  TASK_TYPE_CONVERSATION = 2;
+  TASK_TYPE_ANALYSIS = 3;
+  TASK_TYPE_CREATION = 4;
+  TASK_TYPE_RESEARCH = 5;
+  TASK_TYPE_TRANSACTION = 6;
+  TASK_TYPE_COORDINATION = 7;
+}
+
+message TaskArtifact {
+  string id = 1;
+  string task_id = 2;
+  string name = 3;
+  string description = 4;
+  ArtifactType artifact_type = 5;
+  bytes content = 6;
+  string mime_type = 7;
+  int64 size_bytes = 8;
+  string checksum = 9;
+  int64 created_at = 10;
+}
+
+enum ArtifactType {
+  ARTIFACT_TYPE_UNSPECIFIED = 0;
+  ARTIFACT_TYPE_TEXT = 1;
+  ARTIFACT_TYPE_CODE = 2;
+  ARTIFACT_TYPE_IMAGE = 3;
+  ARTIFACT_TYPE_AUDIO = 4;
+  ARTIFACT_TYPE_VIDEO = 5;
+  ARTIFACT_TYPE_DOCUMENT = 6;
+  ARTIFACT_TYPE_DATA = 7;
+  ARTIFACT_TYPE_LINK = 8;
+}
+
+message TaskHistoryEntry {
+  string id = 1;
+  string task_id = 2;
+  TaskStatus from_status = 3;
+  TaskStatus to_status = 4;
+  string message = 5;
+  string actor = 6;
+  int64 timestamp = 7;
+  map<string, string> details = 8;
+}
+
+message TaskRequest {
+  string agent_id = 1;
+  string title = 2;
+  string description = 3;
+  TaskPriority priority = 4;
+  TaskType task_type = 5;
+  string parent_task_id = 6;
+  int64 due_at = 7;
+  map<string, string> parameters = 8;
+}
+
+message TaskResponse {
+  Task task = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+message TaskUpdate {
+  string task_id = 1;
+  TaskStatus new_status = 2;
+  string message = 3;
+  map<string, string> metadata_updates = 4;
+}
+
+message TaskList {
+  repeated Task tasks = 1;
+  uint32 total_count = 2;
+  string next_page_token = 3;
+}
+
+message TaskFilter {
+  string agent_id = 1;
+  repeated TaskStatus statuses = 2;
+  repeated TaskPriority priorities = 3;
+  repeated TaskType types = 4;
+  int64 created_after = 5;
+  int64 created_before = 6;
+  int64 due_before = 7;
+  string query = 8;
+}
+
+service TaskService {
+  rpc CreateTask(CreateTaskRequest) returns (TaskResponse);
+  rpc GetTask(GetTaskRequest) returns (TaskResponse);
+  rpc UpdateTask(UpdateTaskRequest) returns (TaskResponse);
+  rpc CancelTask(CancelTaskRequest) returns (TaskResponse);
+  rpc ListTasks(ListTasksRequest) returns (TaskList);
+  rpc SearchTasks(SearchTasksRequest) returns (TaskList);
+  rpc AddArtifact(AddArtifactRequest) returns (AddArtifactResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (TaskArtifact);
+  rpc StreamTaskUpdates(StreamTaskUpdatesRequest) returns (stream Task);
+}
+
+message CreateTaskRequest {
+  TaskRequest task_request = 1;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message UpdateTaskRequest {
+  TaskUpdate update = 1;
+}
+
+message CancelTaskRequest {
+  string task_id = 1;
+  string reason = 2;
+}
+
+message ListTasksRequest {
+  TaskFilter filter = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message SearchTasksRequest {
+  string query = 1;
+  string agent_id = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+
+message AddArtifactRequest {
+  string task_id = 1;
+  string name = 2;
+  string description = 3;
+  ArtifactType artifact_type = 4;
+  bytes content = 5;
+  string mime_type = 6;
+}
+
+message AddArtifactResponse {
+  TaskArtifact artifact = 1;
+  bool success = 2;
+}
+
+message GetArtifactRequest {
+  string artifact_id = 1;
+}
+
+message StreamTaskUpdatesRequest {
+  string agent_id = 1;
+  repeated string task_ids = 2;
+}

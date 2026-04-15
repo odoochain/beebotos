@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package beebotos.a2a.capability;
+
+option go_package = "github.com/beebotos/beebotos/proto/a2a";
+
+import "common/types.proto";
+
+message Capability {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  repeated CapabilityParameter parameters = 4;
+  CapabilityReturn returns = 5;
+  repeated string examples = 6;
+  repeated string tags = 7;
+  common.types.SemanticVersion version = 8;
+}
+
+message CapabilityParameter {
+  string name = 1;
+  ParameterType param_type = 2;
+  bool required = 3;
+  string description = 4;
+  string default_value = 5;
+}
+
+enum ParameterType {
+  PARAMETER_TYPE_UNSPECIFIED = 0;
+  PARAMETER_TYPE_STRING = 1;
+  PARAMETER_TYPE_INTEGER = 2;
+  PARAMETER_TYPE_FLOAT = 3;
+  PARAMETER_TYPE_BOOLEAN = 4;
+  PARAMETER_TYPE_ARRAY = 5;
+  PARAMETER_TYPE_OBJECT = 6;
+}
+
+message CapabilityReturn {
+  ParameterType return_type = 1;
+  string description = 2;
+}
+
+message AgentCard {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  common.types.SemanticVersion version = 4;
+  repeated Capability capabilities = 5;
+  repeated Endpoint endpoints = 6;
+  AuthenticationMethod authentication = 7;
+  map<string, string> metadata = 8;
+  uint64 registered_at = 9;
+}
+
+message Endpoint {
+  Protocol protocol = 1;
+  string address = 2;
+  uint32 port = 3;
+  string path = 4;
+}
+
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_HTTP = 1;
+  PROTOCOL_HTTPS = 2;
+  PROTOCOL_WEBSOCKET = 3;
+  PROTOCOL_WEBSOCKET_SECURE = 4;
+  PROTOCOL_GRPC = 5;
+}
+
+message AuthenticationMethod {
+  oneof method {
+    NoAuth none = 1;
+    ApiKeyAuth api_key = 2;
+    OAuth2Auth oauth2 = 3;
+    JwtAuth jwt = 4;
+  }
+}
+
+message NoAuth {}
+
+message ApiKeyAuth {
+  string header = 1;
+  string prefix = 2;
+}
+
+message OAuth2Auth {
+  repeated string scopes = 1;
+  string authorization_endpoint = 2;
+  string token_endpoint = 3;
+}
+
+message JwtAuth {
+  string algorithm = 1;
+  string issuer = 2;
+  string audience = 3;
+}
+
+service CapabilityRegistry {
+  rpc RegisterAgent(AgentCard) returns (RegisterAgentResponse);
+  rpc GetAgent(GetAgentRequest) returns (AgentCard);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc FindAgentsByCapability(FindByCapabilityRequest) returns (ListAgentsResponse);
+  rpc SearchAgents(SearchAgentsRequest) returns (ListAgentsResponse);
+  rpc UnregisterAgent(UnregisterAgentRequest) returns (UnregisterAgentResponse);
+}
+
+message RegisterAgentResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message ListAgentsRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListAgentsResponse {
+  repeated AgentCard agents = 1;
+  string next_page_token = 2;
+  uint32 total_count = 3;
+}
+
+message FindByCapabilityRequest {
+  string capability_name = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message SearchAgentsRequest {
+  string query = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message UnregisterAgentRequest {
+  string agent_id = 1;
+}
+
+message UnregisterAgentResponse {
+  bool success = 1;
+}

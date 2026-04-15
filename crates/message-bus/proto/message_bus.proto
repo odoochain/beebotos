@@ -1,0 +1,200 @@
+syntax = "proto3";
+
+package beebotos.messagebus.v1;
+
+option go_package = "github.com/beebotos/beebotos/message-bus/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+
+// Message represents a message in the message bus
+message Message {
+  string message_id = 1;
+  string topic = 2;
+  bytes payload = 3;
+  map<string, string> headers = 4;
+  int32 priority = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  string correlation_id = 8;
+  string reply_to = 9;
+  TraceContext trace_context = 10;
+}
+
+// TraceContext for OpenTelemetry propagation
+message TraceContext {
+  string trace_id = 1;
+  string span_id = 2;
+  bool sampled = 3;
+  map<string, string> baggage = 4;
+}
+
+// PublishRequest is used to publish a message
+message PublishRequest {
+  string topic = 1;
+  Message message = 2;
+}
+
+// SubscribeRequest is used to subscribe to a topic pattern
+message SubscribeRequest {
+  string topic_pattern = 1;
+  string subscription_id = 2;
+}
+
+// SubscriptionMessage is received by subscribers
+message SubscriptionMessage {
+  string subscription_id = 1;
+  Message message = 2;
+}
+
+// UnsubscribeRequest is used to unsubscribe
+message UnsubscribeRequest {
+  string subscription_id = 1;
+}
+
+// RequestMessage is used for request-response pattern
+message RequestMessage {
+  string topic = 1;
+  Message message = 2;
+  google.protobuf.Duration timeout = 3;
+}
+
+// RespondMessage is used to respond to a request
+message RespondMessage {
+  string correlation_id = 1;
+  Message message = 2;
+}
+
+// StreamMessages is a bi-directional streaming message
+message StreamMessage {
+  oneof payload {
+    SubscribeRequest subscribe = 1;
+    SubscriptionMessage message = 2;
+    UnsubscribeRequest unsubscribe = 3;
+    Ping ping = 4;
+    Pong pong = 5;
+  }
+}
+
+// Ping for keepalive
+message Ping {
+  google.protobuf.Timestamp timestamp = 1;
+  bytes payload = 2;
+}
+
+// Pong for keepalive response
+message Pong {
+  google.protobuf.Timestamp timestamp = 1;
+  bytes payload = 2;
+}
+
+// Health check request
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// Health check response
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+  string version = 2;
+  uint64 uptime_seconds = 3;
+}
+
+// Cluster node information
+message NodeInfo {
+  string node_id = 1;
+  string address = 2;
+  repeated string topics = 3;
+  uint64 message_count = 4;
+  NodeStatus status = 5;
+}
+
+enum NodeStatus {
+  NODE_STATUS_UNKNOWN = 0;
+  NODE_STATUS_JOINING = 1;
+  NODE_STATUS_ACTIVE = 2;
+  NODE_STATUS_LEAVING = 3;
+  NODE_STATUS_FAILED = 4;
+}
+
+// Cluster join request
+message JoinRequest {
+  string node_id = 1;
+  string address = 2;
+  repeated string topics = 3;
+}
+
+// Cluster join response
+message JoinResponse {
+  bool success = 1;
+  string cluster_id = 2;
+  repeated NodeInfo nodes = 3;
+  string leader_id = 4;
+}
+
+// Cluster leave request
+message LeaveRequest {
+  string node_id = 1;
+  string reason = 2;
+}
+
+// Topic stats
+message TopicStats {
+  string topic = 1;
+  uint64 subscriber_count = 2;
+  uint64 message_count = 3;
+  uint64 published_total = 4;
+  uint64 delivered_total = 5;
+  uint64 dropped_total = 6;
+}
+
+// Cluster stats request
+message StatsRequest {
+  bool include_topics = 1;
+}
+
+// Cluster stats response
+message StatsResponse {
+  string cluster_id = 1;
+  uint64 node_count = 2;
+  uint64 total_topics = 3;
+  uint64 total_messages = 4;
+  repeated TopicStats topic_stats = 5;
+}
+
+// The MessageBus service definition
+service MessageBusService {
+  // Publish a message to a topic
+  rpc Publish(PublishRequest) returns (google.protobuf.Empty);
+  
+  // Subscribe to topics using bi-directional streaming
+  rpc Subscribe(stream StreamMessage) returns (stream StreamMessage);
+  
+  // Request-response pattern
+  rpc Request(RequestMessage) returns (Message);
+  
+  // Respond to a request
+  rpc Respond(RespondMessage) returns (google.protobuf.Empty);
+  
+  // Health check
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+  
+  // Watch health status
+  rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+  
+  // Join cluster
+  rpc Join(JoinRequest) returns (JoinResponse);
+  
+  // Leave cluster
+  rpc Leave(LeaveRequest) returns (google.protobuf.Empty);
+  
+  // Get cluster stats
+  rpc GetStats(StatsRequest) returns (StatsResponse);
+}

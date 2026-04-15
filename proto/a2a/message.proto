@@ -1,0 +1,160 @@
+// A2A Protocol - Message Definition
+// Agent-to-Agent communication protocol
+
+syntax = "proto3";
+
+package beebotos.a2a;
+
+option go_package = "github.com/beebotos/beebotos/proto/a2a";
+
+// A2A Message
+message A2AMessage {
+  MessageHeader header = 1;
+  MessagePayload payload = 2;
+  bytes signature = 3;
+  ZKProof zk_proof = 4;
+}
+
+// Message header
+message MessageHeader {
+  string message_id = 1;
+  string sender_did = 2;
+  string recipient_did = 3;
+  uint64 timestamp = 4;
+  uint64 ttl = 5;
+  MessageType msg_type = 6;
+  uint64 version = 7;
+}
+
+// Message types
+enum MessageType {
+  UNKNOWN = 0;
+  DISCOVERY = 1;
+  INTENT = 2;
+  NEGOTIATION = 3;
+  AGREEMENT = 4;
+  EXECUTION = 5;
+  SETTLEMENT = 6;
+  DISPUTE = 7;
+  HEARTBEAT = 8;
+}
+
+// Message payload
+message MessagePayload {
+  oneof content {
+    DiscoveryRequest discovery_request = 1;
+    DiscoveryResponse discovery_response = 2;
+    IntentMessage intent = 3;
+    NegotiationMessage negotiation = 4;
+    AgreementMessage agreement = 5;
+    ExecutionMessage execution = 6;
+    SettlementMessage settlement = 7;
+    DisputeMessage dispute = 8;
+  }
+}
+
+// Discovery request
+message DiscoveryRequest {
+  string agent_type = 1;
+  repeated string capabilities = 2;
+  uint64 max_results = 3;
+}
+
+// Discovery response
+message DiscoveryResponse {
+  repeated AgentInfo agents = 1;
+}
+
+// Agent info
+message AgentInfo {
+  string did = 1;
+  string agent_type = 2;
+  repeated string capabilities = 3;
+  string endpoint = 4;
+  uint64 reputation_score = 5;
+}
+
+// Intent message
+message IntentMessage {
+  string intent_id = 1;
+  string description = 2;
+  repeated TaskRequirement requirements = 3;
+  PaymentOffer payment = 4;
+  uint64 deadline = 5;
+}
+
+// Task requirement
+message TaskRequirement {
+  string capability = 1;
+  uint64 min_reputation = 2;
+  string constraints = 3;
+}
+
+// Payment offer
+message PaymentOffer {
+  string token_address = 1;
+  string amount = 2; // Big number as string
+  uint64 escrow_duration = 3;
+}
+
+// Negotiation message
+message NegotiationMessage {
+  string negotiation_id = 1;
+  string intent_id = 2;
+  NegotiationType neg_type = 3;
+  string proposal = 4;
+  string counter_proposal = 5;
+}
+
+enum NegotiationType {
+  OFFER = 0;
+  COUNTER = 1;
+  ACCEPT = 2;
+  REJECT = 3;
+}
+
+// Agreement message
+message AgreementMessage {
+  string agreement_id = 1;
+  string negotiation_id = 2;
+  string terms_hash = 3;
+  bytes signature = 4;
+}
+
+// Execution message
+message ExecutionMessage {
+  string execution_id = 1;
+  string agreement_id = 2;
+  ExecutionStatus status = 3;
+  string result_cid = 4; // IPFS CID of result
+}
+
+enum ExecutionStatus {
+  PENDING = 0;
+  IN_PROGRESS = 1;
+  COMPLETED = 2;
+  FAILED = 3;
+}
+
+// Settlement message
+message SettlementMessage {
+  string settlement_id = 1;
+  string execution_id = 2;
+  string payment_tx_hash = 3;
+  uint64 amount_released = 4;
+}
+
+// Dispute message
+message DisputeMessage {
+  string dispute_id = 1;
+  string agreement_id = 2;
+  string reason = 3;
+  string evidence_cid = 4;
+}
+
+// ZK Proof (optional privacy)
+message ZKProof {
+  bytes proof_data = 1;
+  string proof_type = 2;
+  bytes public_inputs = 3;
+}

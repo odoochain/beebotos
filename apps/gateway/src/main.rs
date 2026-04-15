@@ -1,0 +1,1398 @@
+//! BeeBotOS Gateway Application
+//!
+//! Production-ready API Gateway using beebotos-gateway-lib for infrastructure.
+//! This module focuses on business logic:
+//! - HTTP handlers for Agent management
+//! - Database persistence
+//! - Integration with kernel for Agent execution
+
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::{Extension, Query, State};
+use axum::middleware::from_fn_with_state;
+use axum::routing::{delete, get, post};
+use axum::Router;
+use axum_server::tls_rustls::RustlsConfig;
+// Use gateway-lib for infrastructure
+use gateway::{
+    error::GatewayError,
+    middleware::{auth_middleware, cors_layer, rate_limit_middleware, trace_layer, GatewayState},
+    rate_limit::RateLimitManager,
+    websocket::WebSocketManager,
+    Gateway,
+};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use tokio::signal;
+use tokio::sync::{mpsc, RwLock};
+use tower_http::compression::CompressionLayer;
+use tower_http::timeout::TimeoutLayer;
+use uuid;
+
+// Business logic modules
+mod auth;
+mod capability;
+mod clients;
+mod color_theme;
+mod config;
+mod config_wizard;
+mod error;
+mod handlers;
+mod health;
+mod message_bus;
+mod middleware;
+mod models;
+mod services;
+mod state_machine;
+mod telemetry;
+
+use beebotos_agents::{
+    ChannelRegistry, DingTalkChannelFactory, DiscordChannelFactory, GatewayAgentRuntime,
+    LarkChannelFactory, PersonalWeChatFactory, SlackChannelFactory, TelegramChannelFactory,
+    WebChatFactory,
+};
+use beebotos_agents::communication::channel::WeChatFactory;
+use tracing::{error, info, warn};
+
+// 🟢 P1 FIX: Import gateway-lib traits and types
+use gateway::{
+    RuntimeConfig as AgentRuntimeConfig, SandboxLevel,
+    StateStore, StateStoreConfig,
+};
+
+use crate::config::{AppConfig, BeeBotOSConfig};
+use crate::handlers::http::agents;
+use crate::services::agent_runtime_manager::AgentRuntimeManager;
+use crate::services::message_processor::MessageProcessor;
+use crate::services::agent_resolver::AgentResolver;
+// Channel Manager integration
+use crate::services::agent_service::AgentService;
+
+/// Agent runtime info managed by this gateway
+///
+/// Tracks agent state in memory. Kernel integration is handled by AgentService.
+#[derive(Debug, Clone)]
+pub struct AgentRuntimeInfo {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    pub created_at: u64,
+    pub capabilities: Vec<String>,
+    /// Kernel information from AgentService
+    pub kernel_info: Option<crate::services::agent_service::AgentKernelInfo>,
+}
+
+/// Application state combining gateway-lib infrastructure with business state
+///
+/// Agent lifecycle is managed by AgentService which internally uses
+/// beebotos-kernel.
+///
+/// 🔒 P0 FIX: Unified state management - using StateStore (CQRS) as single source
+/// of truth, removed duplicate in-memory HashMap.
+///
+/// 🟢 P1 FIX: Using AgentRuntime trait for decoupled agent management.
+pub struct AppState {
+    /// Business configuration (DB, etc.)
+    pub config: BeeBotOSConfig,
+    /// Database connection pool
+    pub db: SqlitePool,
+    /// Unified state store (CQRS pattern)
+    pub state_store: Arc<gateway::StateStore>,
+    /// Agent runtime (trait-based, decoupled from concrete implementation)
+    pub agent_runtime: Arc<dyn gateway::AgentRuntime>,
+    /// Agent service for business logic (includes kernel integration)
+    /// DEPRECATED: Migrate to agent_runtime
+    pub agent_service: AgentService,
+    /// Agent runtime manager bridging gateway with beebotos_agents
+    /// DEPRECATED: Migrate to agent_runtime
+    pub agent_runtime_manager: Arc<AgentRuntimeManager>,
+    /// Unified state manager handle
+    /// DEPRECATED: Migrate to state_store
+    pub state_manager: beebotos_agents::StateManagerHandle,
+    /// Enhanced state machine service
+    pub state_machine_service: Option<Arc<crate::services::StateMachineService>>,
+    /// Task monitor service for kernel fault awareness
+    pub task_monitor: Option<Arc<crate::services::TaskMonitorService>>,
+    /// Chain service for blockchain interactions
+    pub chain_service: Option<Arc<crate::services::ChainService>>,
+    /// Wallet service for blockchain transactions
+    pub wallet_service: Option<Arc<crate::services::WalletService>>,
+    /// DAO service for governance operations
+    pub dao_service: Option<Arc<crate::services::DaoService>>,
+    /// Identity service for on-chain identity management
+    pub identity_service: Option<Arc<crate::services::IdentityService>>,
+    /// Rate limiter from gateway-lib
+    pub rate_limiter: Arc<RateLimitManager>,
+    /// Metrics
+    pub metrics: telemetry::Metrics,
+    /// WebSocket manager from gateway-lib
+    pub ws_manager: Option<Arc<WebSocketManager>>,
+    /// Webhook handler state
+    pub webhook_state: Arc<RwLock<handlers::http::webhooks::WebhookHandlerState>>,
+    /// Channel registry for messaging platforms
+    pub channel_registry: Option<Arc<ChannelRegistry>>,
+    /// Channel event bus sender for starting listeners outside initialization
+    pub channel_event_bus: Option<mpsc::Sender<beebotos_agents::communication::channel::ChannelEvent>>,
+    /// Kernel reference for health checks and direct access
+    pub kernel: Arc<beebotos_kernel::Kernel>,
+    /// LLM service for processing messages
+    pub llm_service: Arc<crate::services::llm_service::LlmService>,
+    /// Skill registry for skill management
+    pub skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
+    /// Message processor for channel events
+    pub message_processor: Option<Arc<MessageProcessor>>,
+    /// Agent resolver for mapping channels/users to agents
+    pub agent_resolver: Option<Arc<AgentResolver>>,
+    /// Channel-to-agent binding store
+    pub channel_binding_store: Option<Arc<gateway::ChannelBindingStore>>,
+}
+
+impl AppState {
+    /// Create new application state
+    ///
+    /// 🟢 P1 FIX: Now initializes StateStore (CQRS) and AgentRuntime trait.
+    pub async fn new(
+        config: BeeBotOSConfig,
+        db: SqlitePool,
+        ws_manager: Option<Arc<WebSocketManager>>,
+        rate_limiter: Arc<RateLimitManager>,
+        kernel: Arc<beebotos_kernel::Kernel>,
+    ) -> anyhow::Result<Self> {
+        // 🟢 P1 FIX: Initialize StateStore (CQRS pattern)
+        let state_store_config = StateStoreConfig {
+            event_sourcing: true,
+            cache_ttl_secs: 300,
+            max_cache_entries: 10000,
+            event_retention_days: 90,
+            audit_logging: true,
+        };
+        let state_store = Arc::new(
+            StateStore::new(db.clone(), state_store_config)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to initialize StateStore: {}", e))?
+        );
+        info!("✅ StateStore (CQRS) initialized");
+
+        // Initialize LLM service first (needed by AgentRuntime)
+        let llm_service = match crate::services::llm_service::LlmService::new(config.clone()).await {
+            Ok(service) => {
+                info!("✅ LLM Service initialized with beebotos_agents::llm");
+                Arc::new(service)
+            }
+            Err(e) => {
+                error!("❌ Failed to initialize LLM Service: {}", e);
+                return Err(anyhow::anyhow!("LLM Service initialization failed: {}", e));
+            }
+        };
+
+        // 🟢 P1 FIX: Initialize AgentRuntime trait implementation
+        let agent_runtime_config = AgentRuntimeConfig {
+            max_agents: 1000,
+            kernel_enabled: true,
+            sandbox_level: SandboxLevel::Kernel,
+            database_url: config.database.url.clone(),
+        };
+        let llm_interface: Arc<dyn beebotos_agents::communication::LLMCallInterface> =
+            Arc::new(crate::services::agent_runtime_manager::GatewayLLMInterface::new(llm_service.clone()));
+        let agent_runtime: Arc<dyn gateway::AgentRuntime> = Arc::new(
+            GatewayAgentRuntime::new(Some(kernel.clone()), Some(llm_interface), agent_runtime_config, Some(db.clone()))
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to initialize AgentRuntime: {}", e))?
+        );
+        info!("✅ AgentRuntime (trait-based) initialized");
+
+        // Legacy: Agent runtime manager bridges gateway with beebotos_agents
+        let agent_runtime_manager = Arc::new(
+            AgentRuntimeManager::new_with_default_state_manager(
+                Some(kernel.clone()),
+                config.clone(),
+                llm_service.clone(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize AgentRuntimeManager: {}", e))?
+        );
+
+        // Legacy: AgentService now owns the kernel integration
+        let agent_service = AgentService::new(
+            db.clone(),
+            kernel.clone(),
+            agent_runtime_manager.clone(),
+            config.clone(),
+        );
+
+        // Initialize webhook state
+        let webhook_state = Arc::new(RwLock::new(
+            handlers::http::webhooks::WebhookHandlerState::new(),
+        ));
+
+        // Register webhook handlers
+        {
+            let state = webhook_state.write().await;
+            if let Err(e) = state.register_handlers().await {
+                warn!("Failed to register some webhook handlers: {}", e);
+            }
+        }
+
+        // Legacy: Get state manager handle from runtime manager
+        let state_manager = agent_runtime_manager.state_manager();
+
+        // Initialize enhanced state machine service
+        let state_machine_service = {
+            let service = Arc::new(crate::services::StateMachineService::new(
+                state_manager.clone(),
+            ));
+            info!("✅ StateMachineService initialized");
+            Some(service)
+        };
+
+        // Initialize task monitor service for kernel fault awareness
+        let task_monitor = {
+            let monitor = Arc::new(crate::services::TaskMonitorService::new(
+                kernel.clone(),
+                state_machine_service.clone(),
+            ));
+            info!("✅ TaskMonitorService initialized");
+            Some(monitor)
+        };
+
+        // 🟢 P1 FIX: Initialize Wallet service
+        let wallet_service = if config.blockchain.enabled {
+            let wallet_config = crate::services::WalletServiceConfig::from(&config.blockchain);
+            match crate::services::WalletService::new(wallet_config).await {
+                Ok(service) => {
+                    info!("✅ WalletService initialized");
+                    Some(Arc::new(service))
+                }
+                Err(e) => {
+                    warn!("❌ Failed to initialize WalletService: {}", e);
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ Blockchain disabled, WalletService not initialized");
+            None
+        };
+
+        // 🟢 P1 FIX: Initialize DAO service
+        let dao_service = if config.blockchain.enabled {
+            if let Some(ref wallet) = wallet_service {
+                let dao_config = crate::services::DaoServiceConfig::from(&config.blockchain);
+                match crate::services::DaoService::new(dao_config, wallet.clone()).await {
+                    Ok(service) => {
+                        info!("✅ DaoService initialized");
+                        Some(Arc::new(service))
+                    }
+                    Err(e) => {
+                        warn!("❌ Failed to initialize DaoService: {}", e);
+                        None
+                    }
+                }
+            } else {
+                warn!("❌ DaoService not initialized: WalletService required");
+                None
+            }
+        } else {
+            info!("ℹ️ Blockchain disabled, DaoService not initialized");
+            None
+        };
+
+        // 🟢 P1 FIX: Initialize Identity service
+        let identity_service = if config.blockchain.enabled {
+            if let Some(ref wallet) = wallet_service {
+                let identity_config = crate::services::IdentityServiceConfig::from(&config.blockchain);
+                match crate::services::IdentityService::new(identity_config, wallet.clone()).await {
+                    Ok(service) => {
+                        info!("✅ IdentityService initialized");
+                        Some(Arc::new(service))
+                    }
+                    Err(e) => {
+                        warn!("❌ Failed to initialize IdentityService: {}", e);
+                        None
+                    }
+                }
+            } else {
+                warn!("❌ IdentityService not initialized: WalletService required");
+                None
+            }
+        } else {
+            info!("ℹ️ Blockchain disabled, IdentityService not initialized");
+            None
+        };
+
+        // Legacy: Initialize Chain service (will be deprecated)
+        let chain_service = if config.blockchain.enabled {
+            let chain_config = crate::services::ChainServiceConfig::from(&config.blockchain);
+            match crate::services::ChainService::new(chain_config).await {
+                Ok(service) => {
+                    info!("✅ ChainService initialized (legacy)");
+                    Some(Arc::new(service))
+                }
+                Err(e) => {
+                    warn!("❌ Failed to initialize ChainService: {}", e);
+                    None
+                }
+            }
+        } else {
+            info!("ℹ️ Blockchain disabled, ChainService not initialized");
+            None
+        };
+
+        // Initialize SkillRegistry
+        let skill_registry = Arc::new(beebotos_agents::skills::SkillRegistry::new());
+        info!("✅ SkillRegistry initialized");
+
+        // Initialize channel binding store
+        let channel_binding_store = Arc::new(
+            gateway::ChannelBindingStore::new(db.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to initialize ChannelBindingStore: {}", e))?
+        );
+        info!("✅ ChannelBindingStore initialized");
+
+        let agent_resolver = Arc::new(
+            AgentResolver::new(
+                config.channels.default_agent_id.clone(),
+                state_store.clone(),
+                agent_runtime.clone(),
+            )
+            .with_channel_binding_store(channel_binding_store.clone()),
+        );
+
+        Ok(Self {
+            config,
+            db,
+            state_store,
+            agent_runtime,
+            agent_service,
+            agent_runtime_manager,
+            state_manager,
+            state_machine_service,
+            task_monitor,
+            chain_service,
+            wallet_service,
+            dao_service,
+            identity_service,
+            rate_limiter,
+            metrics: telemetry::Metrics::new(),
+            ws_manager,
+            webhook_state,
+            channel_registry: None,
+            channel_event_bus: None,
+            kernel,
+            llm_service,
+            skill_registry: Some(skill_registry),
+            message_processor: None,
+            agent_resolver: Some(agent_resolver),
+            channel_binding_store: Some(channel_binding_store),
+        })
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Load environment variables from .env file if present
+    dotenvy::dotenv().ok();
+
+    // Detect and apply color theme from command line arguments
+    // This must happen before any colored output
+    let args: Vec<String> = std::env::args().collect();
+    
+    // Check for --theme or --no-color arguments
+    if let Some(theme) = color_theme::ColorTheme::from_args(&args) {
+        theme.apply();
+        if theme.colors_enabled() {
+            eprintln!("[Config] Using color theme: {}", theme.display_name());
+        }
+    } else {
+        // Auto-detect from environment
+        let theme = color_theme::ColorTheme::detect_from_env();
+        theme.apply();
+    }
+
+    // Load configuration directly (no interactive wizard; all config managed via web admin)
+    let app_config = BeeBotOSConfig::load()
+        .map_err(|e| anyhow::anyhow!("Failed to load configuration: {}", e))?;
+    app_config.validate()?;
+
+    // Set WeChat environment variables from config for webhook handlers
+    if let Some(wechat_config) = &app_config.channels.wechat {
+        if wechat_config.enabled {
+            if let Some(corp_id) = wechat_config.settings.get("corp_id").and_then(|v| v.as_str()) {
+                std::env::set_var("WECHAT_CORP_ID", corp_id);
+            }
+            if let Some(token) = wechat_config.settings.get("token").and_then(|v| v.as_str()) {
+                std::env::set_var("WECHAT_TOKEN", token);
+            }
+            if let Some(aes_key) = wechat_config.settings.get("encoding_aes_key").and_then(|v| v.as_str()) {
+                std::env::set_var("WECHAT_ENCODING_AES_KEY", aes_key);
+            }
+            info!("✅ WeChat environment variables set from config");
+        }
+    }
+
+    // Initialize telemetry
+    telemetry::init_telemetry(&app_config.logging, &app_config.tracing);
+    info!("Starting BeeBotOS Gateway v{}", env!("CARGO_PKG_VERSION"));
+
+    // Debug: Print loaded LLM configuration
+    info!(
+        "📋 Loaded LLM config: default_provider={}, fallback_chain={:?}",
+        app_config.models.default_provider, app_config.models.fallback_chain
+    );
+
+    // Initialize database
+    let db = init_database(&app_config).await?;
+    info!("Database connection pool initialized");
+
+    // Set personal WeChat session file path to centralized data directory
+    {
+        let session_file = std::path::PathBuf::from("data/personal_wechat_session.json");
+        std::env::set_var("PERSONAL_WECHAT_SESSION_FILE", session_file.as_os_str());
+        info!("个人微信 session 持久化路径: {:?}", session_file);
+    }
+
+    // Initialize BeeBotOS Kernel for sandboxed agent execution
+    info!("Initializing BeeBotOS Kernel...");
+    let kernel = Arc::new(
+        beebotos_kernel::KernelBuilder::new()
+            .with_max_agents(1000)
+            .with_wasm(true)
+            .with_tee_auto()
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build kernel: {}", e))?,
+    );
+
+    // Start the kernel
+    kernel
+        .start()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to start kernel: {}", e))?;
+    info!("✅ BeeBotOS Kernel initialized and started");
+
+    // 🟢 P1 FIX: Initialize Message Bus
+    info!("Initializing Message Bus...");
+    let message_bus = message_bus::GatewayMessageBus::new();
+    message_bus::init_global_message_bus(message_bus);
+    info!("✅ Message Bus initialized");
+
+    // Initialize gateway-lib infrastructure
+    let gateway_config = app_config.to_gateway_config()?;
+    let gateway = Gateway::new(gateway_config.clone()).await?;
+
+    // Get rate limiter from gateway-lib
+    let rate_limiter = gateway.rate_limiter.clone();
+
+    // Get WebSocket manager if enabled
+    let ws_manager = gateway.websocket.clone();
+
+    // Start gateway infrastructure
+    gateway.start().await?;
+
+    // Initialize Channel Registry
+    let (event_tx, mut event_rx) =
+        mpsc::channel::<beebotos_agents::communication::channel::ChannelEvent>(1000);
+    let channel_registry = init_channel_registry(&app_config, event_tx.clone()).await?;
+
+    // Attach WebSocket manager to WebChat channel if it exists
+    if let (Some(ref registry), Some(ref ws)) = (&channel_registry, &ws_manager) {
+        if let Some(webchat_channel) = registry.get_channel("webchat").await {
+            let guard = webchat_channel.read().await;
+            if let Some(wc) = guard.as_any().downcast_ref::<
+                beebotos_agents::communication::channel::WebChatChannel
+            >() {
+                wc.set_ws_manager(ws.clone()).await;
+                info!("✅ WebSocket manager attached to WebChat channel");
+            }
+        }
+    }
+
+    // Create application state with kernel
+    let mut app_state = AppState::new(
+        app_config.clone(),
+        db,
+        ws_manager,
+        rate_limiter.clone(),
+        kernel.clone(),
+    )
+    .await?;
+    app_state.channel_registry = channel_registry.clone();
+    app_state.channel_event_bus = Some(event_tx.clone());
+    // Initialize MessageProcessor now that channel_registry is available
+    if let Some(ref registry) = channel_registry {
+        app_state.message_processor = Some(Arc::new(MessageProcessor::new(
+            app_state.llm_service.clone(),
+            registry.clone(),
+        )));
+    }
+    let app_state = Arc::new(app_state);
+
+    // Start event processing loop using app_state
+    if app_state.channel_registry.is_some() {
+        let app_state_clone = app_state.clone();
+        tokio::spawn(async move {
+            info!("🎧 Starting Channel event processing loop...");
+
+            loop {
+                match event_rx.recv().await {
+                    Some(event) => {
+                        info!("📨 Received channel event: {:?}", event);
+
+                        if let Some(ref reg) = app_state_clone.channel_registry {
+                            if let beebotos_agents::communication::channel::ChannelEvent::MessageReceived {
+                                platform,
+                                channel_id,
+                                message
+                            } = &event {
+                                // Try Agent-aware processing first
+                                if let (Some(processor), Some(resolver)) = (
+                                    app_state_clone.message_processor.as_ref(),
+                                    app_state_clone.agent_resolver.as_ref()
+                                ) {
+                                    if let Err(e) = processor.handle_message_via_agent(
+                                        *platform,
+                                        channel_id,
+                                        message.clone(),
+                                        resolver.clone(),
+                                        app_state_clone.agent_runtime.clone(),
+                                    ).await {
+                                        error!("❌ Agent message processing error: {}", e);
+                                    }
+                                } else {
+                                    // Fallback to direct LLM processing
+                                    warn!("⚠️  MessageProcessor or AgentResolver not available, falling back to direct LLM");
+                                    let llm_svc = &app_state_clone.llm_service;
+                                    let llm_response = if let Some(channel) = reg.get_channel_by_platform(*platform).await {
+                                        let channel_clone = channel.clone();
+                                        let download_fn = move |key: &str, msg_id: Option<&str>| {
+                                            let chan = channel_clone.clone();
+                                            let key = key.to_string();
+                                            let msg_id = msg_id.map(|s| s.to_string());
+                                            async move {
+                                                chan.read().await.download_image(&key, msg_id.as_deref()).await
+                                            }
+                                        };
+                                        llm_svc.process_message_with_images(message, Some(download_fn)).await
+                                    } else {
+                                        llm_svc.process_message(message).await
+                                    };
+
+                                    match llm_response {
+                                        Ok(response) => {
+                                            info!("🤖 LLM response: {}", response);
+
+                                            let reply_message = beebotos_agents::communication::Message {
+                                                id: uuid::Uuid::new_v4(),
+                                                thread_id: message.thread_id,
+                                                platform: *platform,
+                                                message_type: beebotos_agents::communication::MessageType::Text,
+                                                content: response,
+                                                metadata: std::collections::HashMap::new(),
+                                                timestamp: chrono::Utc::now(),
+                                            };
+
+                                            if let Some(channel) = reg.get_channel_by_platform(*platform).await {
+                                                if let Err(e) = channel.read().await.send(channel_id, &reply_message).await {
+                                                    error!("❌ Failed to send reply: {}", e);
+                                                } else {
+                                                    info!("✅ Reply sent to {:?} channel {}", platform, channel_id);
+                                                }
+                                            } else {
+                                                error!("❌ Channel for platform {:?} not found", platform);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("❌ LLM processing error: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            warn!(
+                                "⚠️  Channel registry not available, skipping message processing"
+                            );
+                        }
+                    }
+                    None => {
+                        warn!("Channel event receiver closed");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // Ensure default agent exists if configured
+    if let Some(ref default_agent_id) = app_config.channels.default_agent_id {
+        ensure_default_agent(
+            app_state.agent_runtime.clone(),
+            default_agent_id,
+            &app_config,
+        ).await;
+    }
+
+    // Create gateway state for middleware
+    let gateway_state = Arc::new(GatewayState::new(gateway_config, rate_limiter));
+
+    // Create router
+    let app = create_router(app_state.clone(), gateway_state);
+
+    // Start server
+    let addr = app_config
+        .server_addr()
+        .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
+    info!("Server configured to listen on {}", addr);
+
+    // Choose between HTTP and HTTPS
+    if app_config.tls.as_ref().map(|t| t.enabled).unwrap_or(false) {
+        start_https_server(app, addr, &app_config).await?;
+    } else {
+        start_http_server(app, addr).await?;
+    }
+
+    // Graceful shutdown
+    shutdown_signal().await;
+    info!("Shutting down gracefully...");
+
+    // Cleanup
+    info!("Shutting down services...");
+    gateway.shutdown().await;
+    telemetry::shutdown_telemetry();
+    info!("Shutdown complete");
+
+    Ok(())
+}
+
+/// Channel initialization configuration
+const CHANNELS: &[(&str, &str)] = &[
+    ("lark", "lark_main"),
+    ("dingtalk", "dingtalk_main"),
+    ("telegram", "telegram_main"),
+    ("discord", "discord_main"),
+    ("slack", "slack_main"),
+    ("wechat", "wechat_main"),
+    ("personal_wechat", "personal_wechat_main"),
+];
+
+/// Try to initialize a single channel if enabled
+async fn try_init_channel(
+    registry: &ChannelRegistry,
+    config: &BeeBotOSConfig,
+    platform: &str,
+    channel_id: &str,
+    event_bus: Option<mpsc::Sender<beebotos_agents::communication::channel::ChannelEvent>>,
+) -> anyhow::Result<bool> {
+    tracing::info!("🔍 Checking platform: {}", platform);
+    let channel_config = match platform {
+        "lark" => config.channels.lark.as_ref(),
+        "dingtalk" => config.channels.dingtalk.as_ref(),
+        "telegram" => config.channels.telegram.as_ref(),
+        "discord" => config.channels.discord.as_ref(),
+        "slack" => config.channels.slack.as_ref(),
+        "wechat" => {
+            tracing::info!("📋 wechat config: {:?}", config.channels.wechat.is_some());
+            config.channels.wechat.as_ref()
+        },
+        "personal_wechat" => {
+            tracing::info!("📋 personal_wechat config: {:?}", config.channels.personal_wechat.is_some());
+            config.channels.personal_wechat.as_ref()
+        },
+        "webchat" => {
+            tracing::info!("📋 webchat config: {:?}", config.channels.webchat.is_some());
+            config.channels.webchat.as_ref()
+        },
+        _ => None,
+    };
+
+    let Some(cfg) = channel_config else {
+        tracing::warn!("⚠️ No config found for platform: {}", platform);
+        return Ok(false);
+    };
+
+    if !cfg.enabled {
+        return Ok(false);
+    }
+
+    info!("📱 Creating {} channel...", platform);
+    let settings = serde_json::to_value(&cfg.settings)?;
+    tracing::info!("🔧 {} settings: {:?}", platform, settings);
+
+    match registry
+        .create_channel(platform, &settings)
+        .await
+    {
+        Ok(channel) => {
+            info!("✅ {} channel '{}' created successfully", platform, channel_id);
+
+            // Connect and start listener
+            {
+                let mut guard = channel.write().await;
+                if let Err(e) = guard.connect().await {
+                    warn!("❌ Failed to connect {} channel: {}", platform, e);
+                } else {
+                    info!("✅ {} channel '{}' connected", platform, channel_id);
+                    if let Some(event_bus) = event_bus {
+                        let channel_clone = channel.clone();
+                        let platform_name = platform.to_string();
+                        let channel_id_name = channel_id.to_string();
+                        tokio::spawn(async move {
+                            let mut guard = channel_clone.write().await;
+                            if let Err(e) = guard.start_listener(event_bus).await {
+                                warn!("❌ Failed to start {} listener: {}", platform_name, e);
+                            } else {
+                                info!("✅ {} channel '{}' listener started", platform_name, channel_id_name);
+                            }
+                        });
+                    }
+                }
+            }
+
+            Ok(true)
+        }
+        Err(e) => {
+            warn!("❌ Failed to create {} channel: {}", platform, e);
+            Ok(false)
+        }
+    }
+}
+
+/// Initialize Channel Registry
+async fn init_channel_registry(
+    config: &BeeBotOSConfig,
+    event_tx: mpsc::Sender<beebotos_agents::communication::channel::ChannelEvent>,
+) -> anyhow::Result<Option<Arc<ChannelRegistry>>> {
+    let registry = ChannelRegistry::new(event_tx.clone());
+
+    // Register channel factories
+    info!("📦 Registering channel factories...");
+    registry.register(Box::new(LarkChannelFactory::new())).await;
+    registry
+        .register(Box::new(DingTalkChannelFactory::new()))
+        .await;
+    registry
+        .register(Box::new(TelegramChannelFactory::new()))
+        .await;
+    registry
+        .register(Box::new(DiscordChannelFactory::new()))
+        .await;
+    registry
+        .register(Box::new(SlackChannelFactory::new()))
+        .await;
+    registry
+        .register(Box::new(WeChatFactory::new()))
+        .await;
+    registry
+        .register(Box::new(PersonalWeChatFactory::new()))
+        .await;
+    registry
+        .register(Box::new(WebChatFactory::new()))
+        .await;
+    info!(
+        "✅ Registered {} channel factories",
+        registry.factory_count().await
+    );
+
+    // Create and start channels from configuration
+    let mut has_channels = false;
+
+    for (platform, channel_id) in CHANNELS {
+        match try_init_channel(&registry, config, platform, channel_id, Some(event_tx.clone())).await {
+            Ok(true) => has_channels = true,
+            Ok(false) => {}
+            Err(e) => warn!("❌ Channel initialization error: {}", e),
+        }
+    }
+
+    if has_channels {
+        info!(
+            "✅ Channel Registry initialized with {} active channels",
+            registry.channel_count().await
+        );
+        Ok(Some(Arc::new(registry)))
+    } else {
+        info!("ℹ️ No channels configured, skipping Channel Registry");
+        Ok(None)
+    }
+}
+
+/// Initialize database connection pool with retry logic
+/// 
+/// REL-002: Implements connection retry with exponential backoff
+async fn init_database(config: &AppConfig) -> anyhow::Result<SqlitePool> {
+    const MAX_RETRIES: u32 = 5;
+    const INITIAL_RETRY_DELAY_MS: u64 = 1000;
+    const MAX_RETRY_DELAY_MS: u64 = 30000;
+    
+    let mut last_error = None;
+    let mut retry_delay = INITIAL_RETRY_DELAY_MS;
+    
+    for attempt in 0..MAX_RETRIES {
+        match try_connect_database(config).await {
+            Ok(pool) => {
+                if attempt > 0 {
+                    info!("✅ Database connection established after {} attempt(s)", attempt + 1);
+                }
+                return Ok(pool);
+            }
+            Err(e) => {
+                last_error = Some(e);
+                if attempt < MAX_RETRIES - 1 {
+                    warn!(
+                        "⚠️ Database connection attempt {}/{} failed, retrying in {}ms...",
+                        attempt + 1,
+                        MAX_RETRIES,
+                        retry_delay
+                    );
+                    tokio::time::sleep(Duration::from_millis(retry_delay)).await;
+                    // Exponential backoff with jitter prevention
+                    retry_delay = std::cmp::min(retry_delay * 2, MAX_RETRY_DELAY_MS);
+                }
+            }
+        }
+    }
+    
+    Err(anyhow::anyhow!(
+        "Failed to connect to database after {} attempts: {:?}",
+        MAX_RETRIES,
+        last_error
+    ))
+}
+
+/// Try to connect to database once
+async fn try_connect_database(config: &AppConfig) -> anyhow::Result<SqlitePool> {
+    // Ensure database directory exists for file-based SQLite
+    let db_url = &config.database.url;
+    if db_url.starts_with("sqlite:") && !db_url.contains(":memory:") {
+        // Handle both "sqlite://path" and "sqlite:path" formats
+        let path = if let Some(p) = db_url.strip_prefix("sqlite://") {
+            // On Windows, absolute paths may have a leading slash before the drive letter
+            // e.g., sqlite:///C:/path -> /C:/path. Strip it so Path can parse correctly.
+            if cfg!(target_os = "windows") && p.len() > 2 && p.starts_with('/') && p.as_bytes()[2] == b':' {
+                &p[1..]
+            } else {
+                p
+            }
+        } else {
+            db_url.strip_prefix("sqlite:").unwrap_or(db_url)
+        };
+        
+        if let Some(dir) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+    }
+
+    // SQLx 默认 create_if_missing=false，对于文件型 SQLite 需要显式启用创建
+    let connect_options = sqlx::sqlite::SqliteConnectOptions::from_str(db_url)?
+        .create_if_missing(true);
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(config.database.max_connections)
+        .min_connections(config.database.min_connections)
+        .acquire_timeout(Duration::from_secs(config.database.connect_timeout_seconds))
+        .idle_timeout(Duration::from_secs(config.database.idle_timeout_seconds))
+        .connect_with(connect_options)
+        .await?;
+
+    // Test the connection
+    sqlx::query("SELECT 1").fetch_one(&pool).await?;
+
+    // Run migrations if enabled
+    if config.database.run_migrations {
+        info!("Running database migrations...");
+        sqlx::migrate!("../../migrations_sqlite").run(&pool).await?;
+        info!("Database migrations complete");
+    }
+
+    Ok(pool)
+}
+
+/// Health check handler
+async fn health_handler() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "healthy",
+        "version": env!("CARGO_PKG_VERSION"),
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Readiness check handler
+async fn readiness_handler() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "ready",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Liveness check handler
+async fn liveness_handler() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "status": "alive",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    }))
+}
+
+/// Create API router combining gateway-lib middleware with business handlers
+fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> Router {
+    // Public routes (no auth required)
+    let public_routes = Router::new()
+        .route("/health", get(health_handler))
+        .route("/ready", get(readiness_handler))
+        .route("/live", get(liveness_handler))
+        .route("/status", get(system_status_handler))
+        .route("/metrics", get(telemetry::metrics_handler))
+        // WebSocket status endpoint (public for health checks)
+        .route("/ws/status", get(handlers::websocket::ws_status_handler))
+        // Webhook routes
+        .route(
+            "/webhook/lark",
+            post(handlers::http::webhooks::lark_webhook_handler),
+        )
+        // WeChat webhook - needs special handling for URL verification (GET with echostr)
+        .route(
+            "/webhook/wechat",
+            get(handlers::http::webhooks::wechat_get_handler)
+                .post({
+                    let state = app_state.clone();
+                    move |Query(params): Query<std::collections::HashMap<String, String>>, body: String| async move {
+                        let msg_sig = params.get("msg_signature").map(|s| s.as_str()).unwrap_or("");
+                        let ts = params.get("timestamp").map(|s| s.as_str()).unwrap_or("");
+                        let nonce = params.get("nonce").map(|s| s.as_str()).unwrap_or("");
+                        handlers::http::webhooks::wechat_post_handler_impl(
+                            state, msg_sig, ts, nonce, &body
+                        ).await
+                    }
+                }),
+        )
+        .route(
+            "/webhook/:platform",
+            post(handlers::http::webhooks::webhook_handler),
+        );
+
+    // Protected API routes
+    let api_routes = Router::new()
+        // Agent API (V1 - Legacy)
+        .route("/api/v1/agents", get(agents::list_agents))
+        .route("/api/v1/agents", post(agents::create_agent))
+        .route("/api/v1/agents/:id", get(agents::get_agent))
+        .route("/api/v1/agents/:id", delete(agents::delete_agent))
+        .route("/api/v1/agents/:id/start", post(agents::start_agent))
+        .route("/api/v1/agents/:id/stop", post(agents::stop_agent))
+        .route("/api/v1/agents/:id/tasks", post(agents::execute_agent_task))
+        // Agent API (V2 - AgentRuntime trait + StateStore CQRS)
+        .route("/api/v2/agents", get(handlers::http::agents_v2::list_agents_v2))
+        .route("/api/v2/agents", post(handlers::http::agents_v2::create_agent_v2))
+        .route("/api/v2/agents/:id", get(handlers::http::agents_v2::get_agent_v2))
+        .route("/api/v2/agents/:id", delete(handlers::http::agents_v2::delete_agent_v2))
+        .route("/api/v2/agents/:id/start", post(handlers::http::agents_v2::start_agent_v2))
+        .route("/api/v2/agents/:id/stop", post(handlers::http::agents_v2::stop_agent_v2))
+        .route("/api/v2/agents/:id/status", get(handlers::http::agents_v2::get_agent_status_v2))
+        .route("/api/v2/agents/:id/tasks", post(handlers::http::agents_v2::execute_task_v2))
+        .route("/api/v2/agents/:id/channels", post(handlers::http::agents_v2::bind_agent_channel))
+        .route("/api/v2/agents/:id/channels", get(handlers::http::agents_v2::list_agent_channels))
+        .route("/api/v2/agents/:id/channels/:channel_id", delete(handlers::http::agents_v2::unbind_agent_channel))
+        // Capability API
+        .route("/api/v1/capabilities", get(agents::list_capability_types))
+        .route("/api/v1/capabilities/validate", post(agents::validate_capabilities))
+        // Chain API (V1 - Legacy ChainService)
+        .route("/api/v1/chain/status", get(handlers::http::chain::get_chain_status))
+        .route("/api/v1/chain/agents/:id/identity", post(handlers::http::chain::register_agent_identity))
+        .route("/api/v1/chain/agents/:id/identity", get(handlers::http::chain::get_agent_identity))
+        .route("/api/v1/chain/agents/:id/has-identity", get(handlers::http::chain::has_agent_identity))
+        .route("/api/v1/chain/dao/proposals", get(handlers::http::chain::list_proposals))
+        .route("/api/v1/chain/dao/proposals", post(handlers::http::chain::create_dao_proposal))
+        .route("/api/v1/chain/dao/proposals/:id", get(handlers::http::chain::get_proposal))
+        .route("/api/v1/chain/dao/proposals/:id/vote", post(handlers::http::chain::cast_vote))
+        // Chain API (V2 - Split Services: WalletService, DaoService, IdentityService)
+        // Wallet endpoints
+        .route("/api/v2/chain/wallet", get(handlers::http::chain_v2::get_wallet_info))
+        .route("/api/v2/chain/wallet/transfer", post(handlers::http::chain_v2::transfer))
+        // Identity endpoints
+        .route("/api/v2/chain/agents/:id/identity", post(handlers::http::chain_v2::register_agent_identity))
+        .route("/api/v2/chain/agents/:id/identity", get(handlers::http::chain_v2::get_agent_identity))
+        .route("/api/v2/chain/agents/:id/has-identity", get(handlers::http::chain_v2::has_agent_identity))
+        // DAO endpoints
+        .route("/api/v2/chain/dao/proposals", get(handlers::http::chain_v2::list_proposals))
+        .route("/api/v2/chain/dao/proposals", post(handlers::http::chain_v2::create_dao_proposal))
+        .route("/api/v2/chain/dao/proposals/:id", get(handlers::http::chain_v2::get_proposal))
+        .route("/api/v2/chain/dao/proposals/:id/vote", post(handlers::http::chain_v2::cast_vote))
+        // State Machine API
+        .route("/api/v1/states", get(handlers::http::state_machine::list_states))
+        .route("/api/v1/states/stats", get(handlers::http::state_machine::get_state_machine_stats))
+        .route("/api/v1/states/timeouts", get(handlers::http::state_machine::check_timeouts))
+        .route("/api/v1/agents/:id/state", get(handlers::http::state_machine::get_agent_state))
+        .route("/api/v1/agents/:id/state/context", get(handlers::http::state_machine::get_agent_state_context))
+        .route("/api/v1/agents/:id/state/transitions", get(handlers::http::state_machine::get_valid_transitions))
+        .route("/api/v1/agents/:id/state/transition", post(handlers::http::state_machine::transition_state))
+        .route("/api/v1/agents/:id/pause", post(handlers::http::state_machine::pause_agent))
+        .route("/api/v1/agents/:id/resume", post(handlers::http::state_machine::resume_agent))
+        .route("/api/v1/agents/:id/retry", post(handlers::http::state_machine::retry_agent))
+        // Task Monitor API
+        .route("/api/v1/tasks/stats", get(handlers::http::task_monitor::get_task_monitor_stats))
+        .route("/api/v1/tasks/monitored", get(handlers::http::task_monitor::list_monitored_agents))
+        .route("/api/v1/tasks/agents/:id", get(handlers::http::task_monitor::get_agent_task_status))
+        .route("/api/v1/tasks/agents/:id/cancel", post(handlers::http::task_monitor::cancel_task_monitoring))
+        .route("/api/v1/tasks/fault-detection", get(handlers::http::task_monitor::get_fault_detection_status))
+        // LLM Metrics API
+        .route("/api/v1/llm/metrics", get(handlers::http::llm_metrics::get_llm_metrics))
+        .route("/api/v1/llm/health", get(handlers::http::llm_metrics::get_llm_health))
+        // Skills API
+        .route("/api/v1/skills", get(handlers::http::skills::list_skills))
+        .route("/api/v1/skills/install", post(handlers::http::skills::install_skill))
+        .route("/api/v1/skills/:id", get(handlers::http::skills::get_skill))
+        .route("/api/v1/skills/:id/uninstall", delete(handlers::http::skills::uninstall_skill))
+        .route("/api/v1/skills/:id/execute", post(handlers::http::skills::execute_skill))
+        .route("/api/v1/skills/hub/health", get(handlers::http::skills::hub_health))
+        // Channel routes
+        .route("/api/v1/channels", get(handlers::http::channels::list_channels))
+        .route("/api/v1/channels/:id", get(handlers::http::channels::get_channel))
+        .route("/api/v1/channels/wechat/qr", post(handlers::http::channels::get_wechat_qr))
+        .route("/api/v1/channels/wechat/qr/check", post(handlers::http::channels::check_wechat_qr))
+        .route("/api/v1/channels/webchat/messages", post(handlers::http::channels::send_webchat_message))
+        // WebSocket broadcast (admin only)
+        .route(
+            "/api/v1/ws/broadcast",
+            post(handlers::websocket::ws_broadcast_handler),
+        )
+        // WebSocket upgrade endpoint (auth required)
+        .route("/ws", get(handlers::websocket::ws_handler))
+        // Layer: Authentication from gateway-lib
+        .layer(from_fn_with_state(gateway_state.clone(), auth_middleware));
+
+    // Combine routes and apply global middleware from gateway-lib
+    let app = Router::new().merge(public_routes).merge(api_routes);
+
+    // Apply layers one by one
+    let app = app
+        .layer(trace_layer())
+        .layer(cors_layer(&gateway_state.config.cors))
+        .layer(CompressionLayer::new())
+        .layer(TimeoutLayer::new(Duration::from_secs(
+            app_state.config.server.timeout_seconds,
+        )))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            app_state.config.server.max_body_size_mb * 1024 * 1024,
+        ))
+        .layer(from_fn_with_state(
+            gateway_state.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(Extension(app_state.clone()));
+
+    app.with_state(app_state)
+}
+
+/// System status handler
+/// 
+/// OBS-003: Enhanced health check with all components
+async fn system_status_handler(
+    State(state): State<Arc<AppState>>,
+) -> Result<axum::Json<serde_json::Value>, GatewayError> {
+    // Use full health check for detailed status
+    let health = health::check_system_full(&state).await;
+    
+    // Get agent count from unified state manager (single source of truth)
+    let agent_count = state.state_manager.list_agents().await.len();
+
+    Ok(axum::Json(serde_json::json!({
+        "service": "beebotos-gateway",
+        "version": env!("CARGO_PKG_VERSION"),
+        "status": health.overall,
+        "components": {
+            "database": health.database,
+            "kernel": health.kernel,
+            "chain": health.chain,
+            "llm_service": health.llm_service,
+            "webhook_handler": health.webhook_handler
+        },
+        "agents": {
+            "active": agent_count
+        },
+        "websocket": state.ws_manager.is_some(),
+        "timestamp": health.timestamp
+    })))
+}
+
+/// Start HTTP server
+async fn start_http_server(app: Router, addr: SocketAddr) -> anyhow::Result<()> {
+    warn!("Starting HTTP server (TLS is disabled - not recommended for production)");
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    info!("HTTP server listening on {}", listener.local_addr()?);
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    Ok(())
+}
+
+/// Start HTTPS server
+async fn start_https_server(
+    app: Router,
+    addr: SocketAddr,
+    config: &AppConfig,
+) -> anyhow::Result<()> {
+    info!("Starting HTTPS server");
+
+    let tls = config
+        .tls
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("TLS configuration not found"))?;
+
+    let cert_path = tls
+        .cert_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("TLS cert path must be set when TLS is enabled"))?;
+    let key_path = tls
+        .key_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("TLS key path must be set when TLS is enabled"))?;
+
+    let tls_config = RustlsConfig::from_pem_file(cert_path, key_path).await?;
+
+    info!("HTTPS server listening on {}", addr);
+
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await?;
+
+    Ok(())
+}
+
+/// Ensure default agent exists on startup
+///
+/// If `channels.default_agent_id` is configured but the agent does not exist,
+/// automatically create a generic default agent.
+async fn ensure_default_agent(
+    agent_runtime: Arc<dyn gateway::AgentRuntime>,
+    agent_id: &str,
+    config: &BeeBotOSConfig,
+) {
+    let agent_id_string = agent_id.to_string();
+    match agent_runtime.status(&agent_id_string).await {
+        Ok(_) => {
+            info!("Default agent {} already exists", agent_id);
+            return;
+        }
+        Err(_) => {
+            info!("Default agent {} not found, creating...", agent_id);
+        }
+    }
+
+    let default_provider = config.models.default_provider.clone();
+    let model_config = config.models.providers.get(&default_provider).cloned();
+
+    let llm_config = gateway::agent_runtime::LlmConfig {
+        provider: default_provider.clone(),
+        model: model_config.as_ref().and_then(|m| m.model.clone()).unwrap_or_else(|| "gpt-4".to_string()),
+        api_key: model_config.as_ref().and_then(|m| m.api_key.clone()),
+        temperature: model_config.as_ref().map(|m| m.temperature).unwrap_or(0.7),
+        max_tokens: model_config.as_ref().and_then(|m| m.context_window).unwrap_or(4096) as u32,
+    };
+
+    let agent_config = gateway::agent_runtime::AgentConfigBuilder::new(agent_id, "Default Agent")
+        .description("Auto-created default agent for channel messages")
+        .with_llm(llm_config)
+        .with_memory(gateway::agent_runtime::MemoryConfig::default())
+        .build();
+
+    match agent_runtime.spawn(agent_config).await {
+        Ok(handle) => {
+            info!("✅ Default agent {} created successfully", handle.agent_id);
+        }
+        Err(e) => {
+            warn!("❌ Failed to create default agent {}: {}", agent_id, e);
+        }
+    }
+}
+
+/// Graceful shutdown signal handler
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = signal::ctrl_c().await {
+            tracing::error!("Failed to install Ctrl+C handler: {}", e);
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                tracing::error!("Failed to install SIGTERM handler: {}", e);
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!("Received Ctrl+C signal");
+        }
+        _ = terminate => {
+            info!("Received SIGTERM signal");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Create a test configuration for unit tests
+    fn create_test_config() -> BeeBotOSConfig {
+        BeeBotOSConfig {
+            system_name: "BeeBotOS".to_string(),
+            version: "2.0.0".to_string(),
+            server: config::ServerConfig {
+                host: "0.0.0.0".to_string(),
+                port: 8080,
+                timeout_seconds: 30,
+                max_body_size_mb: 10,
+                cors: config::CorsConfig {
+                    allowed_origins: vec!["http://localhost:8000".to_string()],
+                    allowed_methods: vec!["GET".to_string(), "POST".to_string()],
+                    allowed_headers: vec!["Content-Type".to_string()],
+                    allow_credentials: true,
+                },
+            },
+            database: config::DatabaseConfig {
+                url: "sqlite://./data/beebotos.db".to_string(),
+                max_connections: 20,
+                min_connections: 5,
+                connect_timeout_seconds: 10,
+                idle_timeout_seconds: 600,
+                run_migrations: true,
+            },
+            jwt: config::JwtConfig {
+                secret: secrecy::SecretString::new("a-very-long-secret-key-at-least-32-chars".to_string()),
+                expiry_hours: 24,
+                refresh_expiry_hours: 168,
+                issuer: "beebotos".to_string(),
+                audience: "api".to_string(),
+            },
+            models: config::ModelsConfig {
+                default_provider: "kimi".to_string(),
+                fallback_chain: vec!["openai".to_string()],
+                cost_optimization: false,
+                max_tokens: 4096,
+                system_prompt: "You are a helpful assistant.".to_string(),
+                providers: {
+                    let mut map = HashMap::new();
+                    map.insert("kimi".to_string(), config::ModelProviderConfig {
+                        api_key: Some("test-key".to_string()),
+                        base_url: Some("https://api.moonshot.cn".to_string()),
+                        model: Some("moonshot-v1-8k".to_string()),
+                        temperature: 0.7,
+                        deployment: None,
+                        context_window: Some(8192),
+                    });
+                    map
+                },
+            },
+            channels: config::ChannelsConfig {
+                auto_download_media: true,
+                media_storage_path: "./data/media".to_string(),
+                max_file_size_mb: 50,
+                context_window_size: 20,
+                auto_reply: true,
+                enable_typing_indicator: true,
+                enabled_platforms: vec!["lark".to_string()],
+                lark: None,
+                dingtalk: None,
+                telegram: None,
+                discord: None,
+                slack: None,
+                wechat: None,
+                personal_wechat: None,
+                teams: None,
+                twitter: None,
+                whatsapp: None,
+                signal: None,
+                matrix: None,
+                imessage: None,
+            },
+            logging: config::LoggingConfig {
+                level: "info".to_string(),
+                format: "json".to_string(),
+                file: "./data/logs/beebotos.log".to_string(),
+                rotation: config::LogRotationConfig {
+                    enabled: true,
+                    max_size_mb: 100,
+                    max_files: 10,
+                },
+            },
+            metrics: config::MetricsConfig {
+                enabled: true,
+                endpoint: "0.0.0.0:9090".to_string(),
+                interval_seconds: 60,
+            },
+            tracing: config::TracingConfig {
+                enabled: false,
+                otel_endpoint: None,
+                sample_rate: 0.1,
+            },
+            rate_limit: config::RateLimitConfig {
+                enabled: true,
+                requests_per_second: 10,
+                burst_size: 50,
+                cooldown_seconds: 60,
+            },
+            security: config::SecurityConfig {
+                allowed_webhook_ips: vec!["0.0.0.0/0".to_string()],
+                verify_webhook_signatures: true,
+                encryption_enabled: true,
+            },
+            tls: None,
+            services: None,
+            blockchain: config::BlockchainConfig {
+                enabled: false,
+                chain_id: 10143,
+                rpc_url: None,
+                agent_wallet_mnemonic: None,
+                identity_contract_address: None,
+                registry_contract_address: None,
+                dao_contract_address: None,
+                skill_nft_contract_address: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn test_router_creation() {
+        let config = create_test_config();
+        let gateway_config = config.to_gateway_config().unwrap();
+
+        let db = SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        let rate_limiter = Arc::new(RateLimitManager::new(Arc::new(
+            gateway::rate_limit::token_bucket::TokenBucketRateLimiter::new(100.0, 200),
+        )));
+
+        let kernel = Arc::new(
+            beebotos_kernel::KernelBuilder::new()
+                .with_max_agents(100)
+                .build()
+                .unwrap(),
+        );
+
+        let app_state = Arc::new(
+            AppState::new(config, db, None, rate_limiter.clone(), kernel)
+                .await
+                .unwrap(),
+        );
+
+        let gateway_state = Arc::new(GatewayState::new(gateway_config, rate_limiter));
+
+        let _router = create_router(app_state, gateway_state);
+    }
+}

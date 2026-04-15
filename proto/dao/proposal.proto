@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package beebotos.dao.proposal;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/dao";
+
+// Proposal lifecycle messages
+message Proposal {
+  uint64 proposal_id = 1;
+  string proposer = 2;
+  ProposalState state = 3;
+  
+  string title = 4;
+  string description = 5;
+  bytes description_hash = 6;
+  
+  repeated ProposalAction actions = 7;
+  
+  google.protobuf.Timestamp created_at = 8;
+  uint64 start_block = 9;
+  uint64 end_block = 10;
+  google.protobuf.Timestamp queued_at = 11;
+  google.protobuf.Timestamp executed_at = 12;
+  
+  VoteTally votes = 13;
+  
+  map<string, string> metadata = 20;
+}
+
+enum ProposalState {
+  STATE_UNSPECIFIED = 0;
+  STATE_PENDING = 1;
+  STATE_ACTIVE = 2;
+  STATE_CANCELED = 3;
+  STATE_DEFEATED = 4;
+  STATE_SUCCEEDED = 5;
+  STATE_QUEUED = 6;
+  STATE_EXPIRED = 7;
+  STATE_EXECUTED = 8;
+}
+
+message ProposalAction {
+  string target = 1;
+  string value = 2;
+  bytes calldata = 3;
+  string signature = 4;  // Human readable signature
+}
+
+message VoteTally {
+  string for_votes = 1;
+  string against_votes = 2;
+  string abstain_votes = 3;
+  string total_voting_power = 4;
+  float participation_rate = 5;
+}
+
+// Vote record
+message Vote {
+  uint64 proposal_id = 1;
+  string voter = 2;
+  VoteType support = 3;
+  string weight = 4;
+  string reason = 5;
+  google.protobuf.Timestamp cast_at = 6;
+}
+
+enum VoteType {
+  VOTE_UNSPECIFIED = 0;
+  VOTE_AGAINST = 0;
+  VOTE_FOR = 1;
+  VOTE_ABSTAIN = 2;
+}
+
+// Proposal creation
+message CreateProposalRequest {
+  string proposer = 1;
+  repeated ProposalAction actions = 2;
+  string title = 3;
+  string description = 4;
+  map<string, string> metadata = 5;
+}
+
+message CreateProposalResponse {
+  uint64 proposal_id = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+// Cast vote
+message CastVoteRequest {
+  uint64 proposal_id = 1;
+  string voter = 2;
+  VoteType support = 3;
+  string reason = 4;
+  bytes signature = 5;
+}
+
+message CastVoteResponse {
+  bool success = 1;
+  string weight = 2;
+  string error_message = 3;
+}
+
+// Query proposals
+message ListProposalsRequest {
+  ProposalState filter_state = 1;
+  string proposer = 2;
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+  int32 page_size = 5;
+  string page_token = 6;
+}
+
+message ListProposalsResponse {
+  repeated Proposal proposals = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// Get proposal details
+message GetProposalRequest {
+  uint64 proposal_id = 1;
+}
+
+message GetProposalResponse {
+  Proposal proposal = 1;
+  repeated Vote votes = 2;
+}
+
+// Proposal execution
+message ExecuteProposalRequest {
+  uint64 proposal_id = 1;
+  string executor = 2;
+}
+
+message ExecuteProposalResponse {
+  bool success = 1;
+  string transaction_hash = 2;
+  repeated ActionReceipt receipts = 3;
+  string error_message = 4;
+}
+
+message ActionReceipt {
+  int32 action_index = 1;
+  bool success = 2;
+  bytes return_data = 3;
+  string gas_used = 4;
+}
+
+// Proposal events
+message ProposalCreatedEvent {
+  uint64 proposal_id = 1;
+  string proposer = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message VoteCastEvent {
+  uint64 proposal_id = 1;
+  string voter = 2;
+  VoteType support = 3;
+  string weight = 4;
+  google.protobuf.Timestamp cast_at = 5;
+}
+
+message ProposalExecutedEvent {
+  uint64 proposal_id = 1;
+  string executor = 2;
+  google.protobuf.Timestamp executed_at = 3;
+}

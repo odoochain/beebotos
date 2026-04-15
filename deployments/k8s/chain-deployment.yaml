@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chain
+  namespace: beebotos
+  labels:
+    app: chain
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chain
+  template:
+    metadata:
+      labels:
+        app: chain
+    spec:
+      containers:
+        - name: chain
+          image: beebotos/chain:v2.0.0
+          ports:
+            - containerPort: 8082
+              name: grpc
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: beebotos-secrets
+                  key: rpc-url
+            - name: PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: beebotos-secrets
+                  key: private-key
+          volumeMounts:
+            - name: config
+              mountPath: config
+            - name: data
+              mountPath: data/chain
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: config
+          configMap:
+            name: beebotos-config
+            items:
+              - key: chain.yaml
+                path: chain.yaml
+        - name: data
+          persistentVolumeClaim:
+            claimName: chain-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain
+  namespace: beebotos
+spec:
+  selector:
+    app: chain
+  ports:
+    - port: 8082
+      targetPort: 8082
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chain-data
+  namespace: beebotos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

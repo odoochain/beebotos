@@ -1,0 +1,20 @@
+{
+  "votes": [
+    {
+      "proposalId": 1,
+      "voter": "0x1111111111111111111111111111111111111111",
+      "support": 1,
+      "weight": "100000000000000000000000",
+      "reason": "Supports ecosystem growth",
+      "timestamp": "2026-03-01T10:00:00Z"
+    },
+    {
+      "proposalId": 1,
+      "voter": "0x2222222222222222222222222222222222222222",
+      "support": 0,
+      "weight": "50000000000000000000000",
+      "reason": "Budget is too high",
+      "timestamp": "2026-03-01T11:00:00Z"
+    }
+  ]
+}

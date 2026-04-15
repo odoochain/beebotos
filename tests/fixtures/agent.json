@@ -1,0 +1,17 @@
+{
+  "id": "agent_test_001",
+  "name": "Test Agent",
+  "version": "1.0.0",
+  "capabilities": ["L1_FileRead", "L2_FileWrite", "L3_NetworkOut"],
+  "config": {
+    "memory_limit": 134217728,
+    "cpu_limit": 100,
+    "timeout": 300
+  },
+  "skills": [
+    {
+      "id": "http-client",
+      "version": "1.0.0"
+    }
+  ]
+}

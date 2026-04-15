@@ -1,0 +1,88 @@
+[package]
+name = "beebotos-web"
+version = "1.1.0"
+edition = "2021"
+description = "Web frontend for BeeBotOS - 100% Compatible with OpenClaw V2026.3.13"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+leptos = { version = "0.8.6", features = ["csr"] }
+leptos_router = { version = "0.8.6" }
+leptos_meta = { version = "0.8.6" }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Document",
+    "HtmlElement",
+    "Location",
+    "Element",
+    "EventTarget",
+    "HtmlInputElement",
+    "HtmlDivElement",
+    "HtmlTextAreaElement",
+    "IntersectionObserver",
+    "IntersectionObserverEntry",
+    "MediaQueryList",
+    "MediaQueryListEvent",
+    "DomRect",
+    "Crypto",
+    "CryptoKey",
+    "WebSocket",
+    "MessageEvent",
+    "Clipboard",
+    "Navigator",
+    "Event",
+    "MouseEvent",
+    "HtmlIFrameElement",
+    "File",
+    "FileList",
+    "HtmlFormElement",
+    "FormData",
+]}
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+gloo-net = "0.5"
+gloo-storage = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+uuid = { version = "1.11", features = ["v4", "js"] }
+web-time = "1.1"
+parking_lot = "0.12"
+rand = { version = "0.8", features = ["small_rng"] }
+getrandom = { version = "0.2", features = ["js"] }
+anyhow = "1.0"
+
+# 服务器端依赖（仅非 WASM 目标）
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+reqwest = { version = "0.12", features = ["stream"] }
+config = "0.14"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.36", features = ["full"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[package.metadata.leptos]
+output-name = "beebotos-web"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.css"
+assets-dir = "public"
+
+[[bin]]
+name = "web-server"
+path = "src/bin/server.rs"

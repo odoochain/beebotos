@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package beebotos.kernel.event;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/kernel";
+
+// Kernel event system
+message KernelEvent {
+  string event_id = 1;
+  EventType event_type = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  uint64 sequence_number = 4;
+  
+  // Source information
+  string source_component = 5;
+  string source_task = 6;
+  
+  // Event payload
+  oneof payload {
+    TaskEvent task_event = 10;
+    MemoryEvent memory_event = 11;
+    SyscallEvent syscall_event = 12;
+    ExceptionEvent exception_event = 13;
+    ResourceEvent resource_event = 14;
+    SecurityEvent security_event = 15;
+  }
+  
+  // Context
+  map<string, string> labels = 20;
+  bytes trace_context = 21;
+}
+
+enum EventType {
+  EVENT_UNSPECIFIED = 0;
+  EVENT_TASK_CREATED = 1;
+  EVENT_TASK_SCHEDULED = 2;
+  EVENT_TASK_COMPLETED = 3;
+  EVENT_TASK_FAILED = 4;
+  EVENT_MEMORY_ALLOCATED = 5;
+  EVENT_MEMORY_FREED = 6;
+  EVENT_SYSCALL = 7;
+  EVENT_EXCEPTION = 8;
+  EVENT_RESOURCE_USAGE = 9;
+  EVENT_SECURITY_VIOLATION = 10;
+}
+
+// Task events
+message TaskEvent {
+  string task_id = 1;
+  TaskEventType type = 2;
+  string parent_task = 3;
+  uint32 priority = 4;
+  TaskState state = 5;
+  
+  // Timing
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp completed_at = 8;
+  uint64 cpu_time_us = 9;
+  
+  // Exit information
+  int32 exit_code = 10;
+  string error_message = 11;
+}
+
+enum TaskEventType {
+  TASK_EVENT_UNSPECIFIED = 0;
+  TASK_CREATED = 1;
+  TASK_STARTED = 2;
+  TASK_BLOCKED = 3;
+  TASK_RESUMED = 4;
+  TASK_COMPLETED = 5;
+  TASK_CANCELLED = 6;
+  TASK_FAILED = 7;
+}
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_PENDING = 1;
+  TASK_RUNNING = 2;
+  TASK_BLOCKED = 3;
+  TASK_COMPLETED = 4;
+  TASK_FAILED = 5;
+}
+
+// Memory events
+message MemoryEvent {
+  string allocation_id = 1;
+  MemoryEventType type = 2;
+  uint64 address = 3;
+  uint64 size = 4;
+  string allocator = 5;
+  
+  // Usage statistics
+  uint64 heap_used = 6;
+  uint64 heap_total = 7;
+  uint64 page_faults = 8;
+}
+
+enum MemoryEventType {
+  MEMORY_EVENT_UNSPECIFIED = 0;
+  MEMORY_ALLOCATED = 1;
+  MEMORY_FREED = 2;
+  MEMORY_MAPPED = 3;
+  MEMORY_UNMAPPED = 4;
+  MEMORY_PAGE_FAULT = 5;
+}
+
+// Syscall events
+message SyscallEvent {
+  string task_id = 1;
+  uint32 syscall_number = 2;
+  string syscall_name = 3;
+  repeated uint64 args = 4;
+  uint64 result = 5;
+  uint64 duration_ns = 6;
+  bool success = 7;
+}
+
+// Exception events
+message ExceptionEvent {
+  string task_id = 1;
+  ExceptionType exception_type = 2;
+  uint64 address = 3;
+  string error_code = 4;
+  bytes stack_trace = 5;
+  bool handled = 6;
+}
+
+enum ExceptionType {
+  EXCEPTION_UNSPECIFIED = 0;
+  EXCEPTION_DIVIDE_BY_ZERO = 1;
+  EXCEPTION_PAGE_FAULT = 2;
+  EXCEPTION_SEGFAULT = 3;
+  EXCEPTION_ILLEGAL_INSTRUCTION = 4;
+  EXCEPTION_STACK_OVERFLOW = 5;
+  EXCEPTION_ASSERTION_FAILED = 6;
+}
+
+// Resource events
+message ResourceEvent {
+  string resource_id = 1;
+  ResourceType resource_type = 2;
+  string action = 3;  // acquire, release, throttle
+  string amount = 4;
+  string limit = 5;
+  float utilization = 6;
+}
+
+enum ResourceType {
+  RESOURCE_UNSPECIFIED = 0;
+  RESOURCE_CPU = 1;
+  RESOURCE_MEMORY = 2;
+  RESOURCE_DISK = 3;
+  RESOURCE_NETWORK = 4;
+  RESOURCE_GPU = 5;
+}
+
+// Security events
+message SecurityEvent {
+  SecurityEventType type = 1;
+  string task_id = 2;
+  string capability = 3;
+  string resource = 4;
+  string action = 5;
+  bool allowed = 6;
+  string reason = 7;
+}
+
+enum SecurityEventType {
+  SECURITY_UNSPECIFIED = 0;
+  SECURITY_CAPABILITY_CHECK = 1;
+  SECURITY_VIOLATION = 2;
+  SECURITY_ESCALATION = 3;
+  SECURITY_AUDIT = 4;
+}
+
+// Event subscription
+message EventSubscription {
+  string subscription_id = 1;
+  repeated EventType event_types = 2;
+  map<string, string> filter_labels = 3;
+  string destination = 4;  // Channel or endpoint
+}
+
+// Event batch for efficient transport
+message EventBatch {
+  repeated KernelEvent events = 1;
+  uint64 batch_id = 2;
+  google.protobuf.Timestamp sent_at = 3;
+}

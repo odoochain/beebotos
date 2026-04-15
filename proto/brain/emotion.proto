@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package beebotos.brain.emotion;
+
+option go_package = "github.com/beebotos/beebotos/proto/brain";
+
+import "common/types.proto";
+
+message PADState {
+  // Pleasure: -1.0 to 1.0
+  double pleasure = 1;
+  // Arousal: -1.0 to 1.0
+  double arousal = 2;
+  // Dominance: -1.0 to 1.0
+  double dominance = 3;
+  int64 timestamp = 4;
+}
+
+message Emotion {
+  EmotionType primary = 1;
+  double intensity = 2; // 0.0 to 1.0
+  PADState pad_state = 3;
+  string trigger_event = 4;
+  int64 created_at = 5;
+}
+
+enum EmotionType {
+  EMOTION_UNSPECIFIED = 0;
+  // Positive emotions
+  EMOTION_JOY = 1;
+  EMOTION_GRATITUDE = 2;
+  EMOTION_INTEREST = 3;
+  EMOTION_PRIDE = 4;
+  EMOTION_CONTENTMENT = 5;
+  EMOTION_LOVE = 6;
+  EMOTION_AMUSEMENT = 7;
+  EMOTION_RELIEF = 8;
+  // Negative emotions
+  EMOTION_ANGER = 9;
+  EMOTION_SADNESS = 10;
+  EMOTION_FEAR = 11;
+  EMOTION_DISGUST = 12;
+  EMOTION_ANXIETY = 13;
+  EMOTION_EMBARRASSMENT = 14;
+  EMOTION_BOREDOM = 15;
+  EMOTION_FRUSTRATION = 16;
+  // Neutral
+  EMOTION_NEUTRAL = 17;
+  EMOTION_SURPRISE = 18;
+  EMOTION_ANTICIPATION = 19;
+}
+
+message PersonalityProfile {
+  string agent_id = 1;
+  OceanTraits ocean = 2;
+  repeated PersonalityModifier modifiers = 3;
+  int64 created_at = 4;
+  int64 updated_at = 5;
+}
+
+message OceanTraits {
+  // Openness: 0.0 to 1.0
+  double openness = 1;
+  // Conscientiousness: 0.0 to 1.0
+  double conscientiousness = 2;
+  // Extraversion: 0.0 to 1.0
+  double extraversion = 3;
+  // Agreeableness: 0.0 to 1.0
+  double agreeableness = 4;
+  // Neuroticism: 0.0 to 1.0
+  double neuroticism = 5;
+}
+
+message PersonalityModifier {
+  string trait_name = 1;
+  double modifier_value = 2;
+  string reason = 3;
+  int64 applied_at = 4;
+}
+
+message MoodState {
+  string agent_id = 1;
+  PADState current_pad = 2;
+  Emotion dominant_emotion = 3;
+  double stability = 4; // 0.0 to 1.0
+  double volatility = 5; // 0.0 to 1.0
+  int64 last_update = 6;
+}
+
+message EmotionalEvent {
+  string event_id = 1;
+  string agent_id = 2;
+  EventType event_type = 3;
+  double impact = 4; // -1.0 to 1.0
+  string description = 5;
+  int64 timestamp = 6;
+}
+
+enum EventType {
+  EVENT_UNSPECIFIED = 0;
+  EVENT_TASK_COMPLETED = 1;
+  EVENT_TASK_FAILED = 2;
+  EVENT_REWARD_RECEIVED = 3;
+  EVENT_PENALTY_RECEIVED = 4;
+  EVENT_SOCIAL_INTERACTION = 5;
+  EVENT_LEARNING_SUCCESS = 6;
+  EVENT_LEARNING_FAILURE = 7;
+  EVENT_GOAL_ACHIEVED = 8;
+  EVENT_GOAL_MISSED = 9;
+}
+
+service EmotionService {
+  rpc GetCurrentMood(GetCurrentMoodRequest) returns (MoodState);
+  rpc UpdateEmotionalState(UpdateEmotionalStateRequest) returns (MoodState);
+  rpc ProcessEmotionalEvent(ProcessEmotionalEventRequest) returns (ProcessEmotionalEventResponse);
+  rpc GetPersonalityProfile(GetPersonalityProfileRequest) returns (PersonalityProfile);
+  rpc UpdatePersonality(UpdatePersonalityRequest) returns (PersonalityProfile);
+  rpc StreamMoodUpdates(StreamMoodUpdatesRequest) returns (stream MoodState);
+}
+
+message GetCurrentMoodRequest {
+  string agent_id = 1;
+}
+
+message UpdateEmotionalStateRequest {
+  string agent_id = 1;
+  PADState target_state = 2;
+  double transition_speed = 3; // 0.0 to 1.0
+}
+
+message ProcessEmotionalEventRequest {
+  string agent_id = 1;
+  EmotionalEvent event = 2;
+}
+
+message ProcessEmotionalEventResponse {
+  MoodState previous_mood = 1;
+  MoodState current_mood = 2;
+  repeated Emotion triggered_emotions = 3;
+}
+
+message GetPersonalityProfileRequest {
+  string agent_id = 1;
+}
+
+message UpdatePersonalityRequest {
+  string agent_id = 1;
+  OceanTraits new_traits = 2;
+}
+
+message StreamMoodUpdatesRequest {
+  string agent_id = 1;
+  int64 update_interval_ms = 2;
+}

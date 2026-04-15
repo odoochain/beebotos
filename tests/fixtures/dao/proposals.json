@@ -1,0 +1,38 @@
+{
+  "proposals": [
+    {
+      "id": 1,
+      "proposer": "0x1234567890123456789012345678901234567890",
+      "title": "Increase Developer Incentives",
+      "description": "Proposal to increase the developer incentive budget for Q2 2026",
+      "targets": ["0xTreasuryManager"],
+      "values": ["0"],
+      "calldatas": ["0x..."],
+      "status": "active",
+      "startBlock": 1000000,
+      "endBlock": 1008000,
+      "votes": {
+        "for": "1500000000000000000000000",
+        "against": "500000000000000000000000",
+        "abstain": "200000000000000000000000"
+      }
+    },
+    {
+      "id": 2,
+      "proposer": "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      "title": "Upgrade Agent Runtime",
+      "description": "Upgrade the Agent Runtime to version 2.1.0",
+      "targets": ["0xAgentRuntime"],
+      "values": ["0"],
+      "calldatas": ["0x..."],
+      "status": "succeeded",
+      "startBlock": 900000,
+      "endBlock": 908000,
+      "votes": {
+        "for": "2500000000000000000000000",
+        "against": "100000000000000000000000",
+        "abstain": "50000000000000000000000"
+      }
+    }
+  ]
+}

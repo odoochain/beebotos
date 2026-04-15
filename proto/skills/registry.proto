@@ -1,0 +1,261 @@
+syntax = "proto3";
+
+package beebotos.skills.registry;
+
+option go_package = "github.com/beebotos/beebotos/proto/skills";
+
+import "common/types.proto";
+
+message Skill {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  common.types.SemanticVersion version = 4;
+  string author = 5;
+  repeated string categories = 6;
+  repeated Function functions = 7;
+  SkillMetadata metadata = 8;
+  PricingInfo pricing = 9;
+  repeated string dependencies = 10;
+  string repository_url = 11;
+  string documentation_url = 12;
+  int64 created_at = 13;
+  int64 updated_at = 14;
+}
+
+message Function {
+  string name = 1;
+  string description = 2;
+  repeated Parameter inputs = 3;
+  repeated Parameter outputs = 4;
+  string example = 5;
+}
+
+message Parameter {
+  string name = 1;
+  string type = 2;
+  bool required = 3;
+  string description = 4;
+  string default_value = 5;
+}
+
+message SkillMetadata {
+  string icon = 1;
+  string readme = 2;
+  string changelog = 3;
+  string license = 4;
+  repeated string keywords = 5;
+  map<string, string> labels = 6;
+}
+
+message PricingInfo {
+  PricingModel model = 1;
+  string price_per_use = 2;
+  string price_per_month = 3;
+  string revenue_share_percent = 4;
+  string token_address = 5;
+}
+
+enum PricingModel {
+  PRICING_UNSPECIFIED = 0;
+  PRICING_FREE = 1;
+  PRICING_PER_USE = 2;
+  PRICING_SUBSCRIPTION = 3;
+  PRICING_FREEMIUM = 4;
+  PRICING_REVENUE_SHARE = 5;
+}
+
+message SkillInstance {
+  string instance_id = 1;
+  string skill_id = 2;
+  string agent_id = 3;
+  InstanceStatus status = 4;
+  map<string, string> config = 5;
+  int64 started_at = 6;
+  int64 last_active = 7;
+  UsageStats usage = 8;
+}
+
+enum InstanceStatus {
+  INSTANCE_UNSPECIFIED = 0;
+  INSTANCE_PENDING = 1;
+  INSTANCE_RUNNING = 2;
+  INSTANCE_PAUSED = 3;
+  INSTANCE_STOPPED = 4;
+  INSTANCE_ERROR = 5;
+}
+
+message UsageStats {
+  uint64 total_calls = 1;
+  uint64 successful_calls = 2;
+  uint64 failed_calls = 3;
+  double avg_latency_ms = 4;
+  string total_cost = 5;
+}
+
+message SkillRating {
+  string skill_id = 1;
+  string user_id = 2;
+  uint32 rating = 3;  // 1-5
+  string review = 4;
+  int64 created_at = 5;
+}
+
+service SkillRegistry {
+  rpc RegisterSkill(RegisterSkillRequest) returns (RegisterSkillResponse);
+  rpc GetSkill(GetSkillRequest) returns (Skill);
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  rpc SearchSkills(SearchSkillsRequest) returns (ListSkillsResponse);
+  rpc UpdateSkill(UpdateSkillRequest) returns (Skill);
+  rpc DeleteSkill(DeleteSkillRequest) returns (DeleteSkillResponse);
+  
+  rpc CreateInstance(CreateInstanceRequest) returns (SkillInstance);
+  rpc GetInstance(GetInstanceRequest) returns (SkillInstance);
+  rpc UpdateInstance(UpdateInstanceRequest) returns (SkillInstance);
+  rpc DeleteInstance(DeleteInstanceRequest) returns (DeleteInstanceResponse);
+  rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
+  
+  rpc ExecuteFunction(ExecuteFunctionRequest) returns (ExecuteFunctionResponse);
+  rpc StreamFunction(StreamFunctionRequest) returns (stream FunctionOutput);
+  
+  rpc RateSkill(RateSkillRequest) returns (RateSkillResponse);
+  rpc GetSkillRatings(GetSkillRatingsRequest) returns (GetSkillRatingsResponse);
+}
+
+message RegisterSkillRequest {
+  Skill skill = 1;
+  bytes package_data = 2;
+}
+
+message RegisterSkillResponse {
+  bool success = 1;
+  string skill_id = 2;
+  string error_message = 3;
+}
+
+message GetSkillRequest {
+  string skill_id = 1;
+}
+
+message ListSkillsRequest {
+  string category = 1;
+  string author = 2;
+  PricingModel pricing_model = 3;
+  uint32 page_size = 4;
+  string page_token = 5;
+}
+
+message ListSkillsResponse {
+  repeated Skill skills = 1;
+  string next_page_token = 2;
+  uint32 total_count = 3;
+}
+
+message SearchSkillsRequest {
+  string query = 1;
+  repeated string categories = 2;
+  uint32 min_rating = 3;
+  uint32 page_size = 4;
+  string page_token = 5;
+}
+
+message UpdateSkillRequest {
+  string skill_id = 1;
+  Skill updated_skill = 2;
+}
+
+message DeleteSkillRequest {
+  string skill_id = 1;
+  string reason = 2;
+}
+
+message DeleteSkillResponse {
+  bool success = 1;
+}
+
+message CreateInstanceRequest {
+  string skill_id = 1;
+  string agent_id = 2;
+  map<string, string> config = 3;
+}
+
+message GetInstanceRequest {
+  string instance_id = 1;
+}
+
+message UpdateInstanceRequest {
+  string instance_id = 1;
+  map<string, string> config_updates = 2;
+  InstanceStatus new_status = 3;
+}
+
+message DeleteInstanceRequest {
+  string instance_id = 1;
+}
+
+message DeleteInstanceResponse {
+  bool success = 1;
+}
+
+message ListInstancesRequest {
+  string agent_id = 1;
+  string skill_id = 2;
+  InstanceStatus status = 3;
+}
+
+message ListInstancesResponse {
+  repeated SkillInstance instances = 1;
+}
+
+message ExecuteFunctionRequest {
+  string instance_id = 1;
+  string function_name = 2;
+  map<string, bytes> parameters = 3;
+  uint32 timeout_ms = 4;
+}
+
+message ExecuteFunctionResponse {
+  bool success = 1;
+  map<string, bytes> results = 2;
+  string error_message = 3;
+  uint32 execution_time_ms = 4;
+}
+
+message StreamFunctionRequest {
+  string instance_id = 1;
+  string function_name = 2;
+  map<string, bytes> parameters = 3;
+}
+
+message FunctionOutput {
+  oneof output {
+    bytes data = 1;
+    string error = 2;
+    bool complete = 3;
+  }
+}
+
+message RateSkillRequest {
+  string skill_id = 1;
+  string user_id = 2;
+  uint32 rating = 3;
+  string review = 4;
+}
+
+message RateSkillResponse {
+  bool success = 1;
+  double new_average_rating = 2;
+}
+
+message GetSkillRatingsRequest {
+  string skill_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message GetSkillRatingsResponse {
+  repeated SkillRating ratings = 1;
+  double average_rating = 2;
+  uint32 total_ratings = 3;
+  string next_page_token = 4;
+}

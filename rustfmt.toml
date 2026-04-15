@@ -1,0 +1,46 @@
+# Rustfmt configuration for BeeBotOS
+
+# Maximum width of each line
+max_width = 100
+
+# Number of spaces per tab
+tab_spaces = 4
+
+# Use small heuristics for line breaks
+use_small_heuristics = "Default"
+
+# Reorder imports
+reorder_imports = true
+
+# Reorder modules
+reorder_modules = true
+
+# Remove nested parens
+remove_nested_parens = true
+
+# Edition
+edition = "2021"
+
+# Merge derives
+merge_derives = true
+
+# Use try shorthand
+try_shorthand = true
+
+# Format strings
+format_strings = true
+
+# Wrap comments
+wrap_comments = true
+
+# Format code in comments
+format_code_in_doc_comments = true
+
+# Import granularity
+imports_granularity = "Module"
+
+# Group imports
+group_imports = "StdExternalCrate"
+
+# Skip items with attributes
+format_generated_files = false

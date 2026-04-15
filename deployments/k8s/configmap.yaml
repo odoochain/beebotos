@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: beebotos-config
+  namespace: beebotos
+data:
+  gateway.yaml: |
+    server:
+      addr: "0.0.0.0:8080"
+      workers: 4
+    
+    metrics:
+      addr: "0.0.0.0:9090"
+    
+    database:
+      pool_size: 10
+      timeout_secs: 30
+    
+    redis:
+      pool_size: 20
+    
+    log_level: "info"
+
+  brain.yaml: |
+    server:
+      addr: "0.0.0.0:8081"
+    
+    memory:
+      max_short_term: 10000
+      consolidation_interval_secs: 3600
+    
+    emotion:
+      decay_rate: 0.01
+      enable_contagion: true
+    
+    evolution:
+      population_size: 150
+      enable_realtime: true
+
+  chain.yaml: |
+    server:
+      addr: "0.0.0.0:8082"
+    
+    monad:
+      chain_id: 10143
+      confirmation_blocks: 12
+    
+    indexer:
+      batch_size: 100
+      poll_interval_ms: 5000
+
+  dao.yaml: |
+    server:
+      addr: "0.0.0.0:8083"
+    
+    governance:
+      voting_delay: 1
+      voting_period: 40320
+      proposal_threshold: "1000000000000000000000"
+      quorum_numerator: 4
+      quorum_denominator: 100

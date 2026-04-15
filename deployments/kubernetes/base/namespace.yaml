@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: beebotos
+  labels:
+    app.kubernetes.io/name: beebotos
+    app.kubernetes.io/component: system

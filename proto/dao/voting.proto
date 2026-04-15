@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package beebotos.dao.voting;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/dao";
+
+// Voting system configuration and operations
+message VotingConfig {
+  string voting_delay = 1;        // Blocks between proposal and voting start
+  string voting_period = 2;       // Duration of voting period in blocks
+  string proposal_threshold = 3;  // Minimum votes to create proposal
+  string quorum_votes = 4;        // Minimum participation for valid vote
+  string timelock_delay = 5;      // Delay before execution
+  
+  VotingStrategy strategy = 6;
+  QuorumConfig quorum = 7;
+}
+
+enum VotingStrategy {
+  STRATEGY_UNSPECIFIED = 0;
+  STRATEGY_SIMPLE_MAJORITY = 1;
+  STRATEGY_SUPER_MAJORITY = 2;
+  STRATEGY_QUADRATIC = 3;
+  STRATEGY_CONVICTION = 4;
+  STRATEGY_LIQUID_DEMOCRACY = 5;
+}
+
+message QuorumConfig {
+  QuorumType type = 1;
+  string threshold = 2;  // Percentage or absolute number
+  bool dynamic = 3;      // Whether quorum adjusts based on participation
+}
+
+enum QuorumType {
+  QUORUM_UNSPECIFIED = 0;
+  QUORUM_PERCENTAGE = 1;  // % of total supply
+  QUORUM_ABSOLUTE = 2;    // Absolute token amount
+  QUORUM_PARTICIPATION = 3;  // Based on historical participation
+}
+
+// Voting power
+message VotingPower {
+  string account = 1;
+  string token_balance = 2;
+  string ve_token_balance = 3;
+  string reputation_score = 4;
+  string delegated_power = 5;
+  string total_voting_power = 6;
+  google.protobuf.Timestamp calculated_at = 7;
+}
+
+// Delegation
+message Delegation {
+  string delegator = 1;
+  string delegatee = 2;
+  string amount = 3;
+  google.protobuf.Timestamp delegated_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  bool active = 6;
+}
+
+message DelegateRequest {
+  string delegator = 1;
+  string delegatee = 2;
+  string amount = 3;
+  google.protobuf.Duration duration = 4;
+}
+
+message DelegateResponse {
+  bool success = 1;
+  string delegation_id = 2;
+  string error_message = 3;
+}
+
+// Voting snapshot
+message VotingSnapshot {
+  uint64 block_number = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  map<string, string> balances = 3;  // account -> balance
+}
+
+// Vote receipt
+message VoteReceipt {
+  uint64 proposal_id = 1;
+  string voter = 2;
+  string transaction_hash = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  bytes proof = 5;  // ZK proof or signature
+}
+
+// Voting events
+message DelegationChangedEvent {
+  string delegator = 1;
+  string from_delegate = 2;
+  string to_delegate = 3;
+  google.protobuf.Timestamp changed_at = 4;
+}
+
+message VotingPowerChangedEvent {
+  string account = 1;
+  string previous_power = 2;
+  string new_power = 3;
+  string reason = 4;
+  google.protobuf.Timestamp changed_at = 5;
+}

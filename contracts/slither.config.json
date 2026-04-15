@@ -1,0 +1,17 @@
+{
+  "filter_paths": "lib,node_modules",
+  "solc_remaps": [
+    "@openzeppelin/=lib/openzeppelin-contracts/",
+    "@openzeppelin-upgradeable/=lib/openzeppelin-contracts-upgradeable/",
+    "forge-std/=lib/forge-std/src/"
+  ],
+  "detectors_to_exclude": [
+    "assembly",
+    "solc-version",
+    "naming-convention",
+    "low-level-calls"
+  ],
+  "compilation_tool": "foundry",
+  "compilation_command": "forge build --build-info",
+  "compilation_directory": "out"
+}

@@ -1,0 +1,14 @@
+[registries.crates-io]
+protocol = "sparse"
+
+[net]
+git-fetch-with-cli = true
+retry = 3
+timeout = 60
+
+# 中国用户可配置镜像源（如需）
+# [source.crates-io]
+# replace-with = 'ustc'
+# 
+# [source.ustc]
+# registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"

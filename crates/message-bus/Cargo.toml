@@ -1,0 +1,69 @@
+[package]
+name = "beebotos-message-bus"
+version = "1.0.0"
+edition = "2021"
+authors = ["BeeBotOS Team"]
+description = "Unified message bus for BeeBotOS with multiple transport backends"
+license = "MIT"
+repository = "https://github.com/beebotos/beebotos"
+
+# [[bin]]
+# name = "mbus-cli"
+# path = "src/bin/mbus-cli.rs"
+# required-features = ["cli"]
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.36", features = ["full", "tracing"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+thiserror = "1.0"
+async-trait = "0.1"
+tracing = "0.1"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# Metrics (optional)
+metrics = { version = "0.22", optional = true }
+
+
+# MessagePack codec (optional)
+rmp-serde = { version = "1.1", optional = true }
+
+# Config dependencies
+serde_yaml = "0.9"
+humantime-serde = "1.1"
+
+# Additional dependencies
+serde_bytes = "0.11"
+rand = "0.8"
+http = "1.0"
+
+# CLI dependencies (optional)
+clap = { version = "4.4", features = ["derive"], optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
+anyhow = { version = "1.0", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[features]
+default = ["metrics", "json-codec", "cli", "memory"]
+memory = []
+json-codec = []
+msgpack-codec = ["dep:rmp-serde"]
+persistence = []
+cli = ["dep:clap", "dep:tracing-subscriber", "dep:anyhow"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

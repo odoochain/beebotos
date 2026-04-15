@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "title": "Test Proposal",
+  "description": "This is a test proposal for unit testing",
+  "proposer": "0x1234567890123456789012345678901234567890",
+  "proposal_type": "standard",
+  "status": "active",
+  "for_votes": "1000000000000000000",
+  "against_votes": "500000000000000000",
+  "abstain_votes": "0",
+  "start_time": 1700000000,
+  "end_time": 1702592000,
+  "executed": false
+}

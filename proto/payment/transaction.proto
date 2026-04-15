@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package beebotos.payment;
+
+option go_package = "github.com/beebotos/api/payment";
+
+// Payment transaction protocol
+
+message Transaction {
+  string transaction_id = 1;
+  string from_address = 2;
+  string to_address = 3;
+  uint64 amount = 4;
+  string token = 5;
+  int64 timestamp = 6;
+  TransactionStatus status = 7;
+  bytes signature = 8;
+  bytes data = 9;
+}
+
+enum TransactionStatus {
+  PENDING = 0;
+  CONFIRMED = 1;
+  FAILED = 2;
+  CANCELLED = 3;
+}
+
+message PaymentRequest {
+  string request_id = 1;
+  string requester = 2;
+  string payer = 3;
+  uint64 amount = 4;
+  string token = 5;
+  string description = 6;
+  int64 expires_at = 7;
+}
+
+message PaymentReceipt {
+  string receipt_id = 1;
+  string request_id = 2;
+  string transaction_hash = 3;
+  int64 confirmed_at = 4;
+}
+
+message Mandate {
+  string mandate_id = 1;
+  string payer = 2;
+  string payee = 3;
+  uint64 max_amount = 4;
+  uint64 used_amount = 5;
+  int64 valid_until = 6;
+  bool is_active = 7;
+}

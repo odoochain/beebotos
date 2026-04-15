@@ -1,0 +1,171 @@
+syntax = "proto3";
+
+package beebotos.a2a.discovery;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/a2a";
+
+// Service discovery protocol
+message DiscoveryRequest {
+  string request_id = 1;
+  string requesting_agent = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  
+  oneof query {
+    CapabilityQuery capability_query = 10;
+    AgentQuery agent_query = 11;
+    ServiceQuery service_query = 12;
+  }
+  
+  QueryOptions options = 20;
+}
+
+message CapabilityQuery {
+  string capability_uri = 1;
+  string capability_type = 2;
+  map<string, string> input_requirements = 3;
+  map<string, string> output_requirements = 4;
+  PriceRange price_range = 5;
+  QualityRequirements quality = 6;
+}
+
+message PriceRange {
+  string min_price = 1;
+  string max_price = 2;
+  string currency = 3;
+}
+
+message QualityRequirements {
+  float min_success_rate = 1;
+  uint32 max_latency_ms = 2;
+  uint32 min_completed_tasks = 3;
+  float min_rating = 4;
+}
+
+message AgentQuery {
+  string agent_id = 1;
+  repeated string capabilities = 2;
+  string reputation_threshold = 3;
+}
+
+message ServiceQuery {
+  string service_type = 1;
+  map<string, string> tags = 2;
+  bool active_only = 3;
+}
+
+message QueryOptions {
+  int32 max_results = 1;
+  int32 timeout_ms = 2;
+  bool include_inactive = 3;
+  SortOrder sort_by = 4;
+}
+
+enum SortOrder {
+  SORT_UNSPECIFIED = 0;
+  SORT_RELEVANCE = 1;
+  SORT_PRICE_ASC = 2;
+  SORT_PRICE_DESC = 3;
+  SORT_QUALITY = 4;
+  SORT_DISTANCE = 5;
+}
+
+// Discovery response
+message DiscoveryResponse {
+  string request_id = 1;
+  string responding_agent = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  
+  repeated AgentCapability results = 10;
+  int32 total_matches = 11;
+  bool has_more = 12;
+  
+  map<string, string> metadata = 20;
+}
+
+message AgentCapability {
+  string agent_id = 1;
+  string agent_name = 2;
+  repeated Capability capabilities = 3;
+  AgentEndpoint endpoint = 4;
+  AgentReputation reputation = 5;
+  google.protobuf.Timestamp last_seen = 6;
+}
+
+message Capability {
+  string uri = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  Schema input_schema = 5;
+  Schema output_schema = 6;
+  PricingInfo pricing = 7;
+  QualityMetrics quality = 8;
+}
+
+message Schema {
+  string content_type = 1;
+  bytes schema_definition = 2;
+  string schema_format = 3;  // json-schema, protobuf, etc.
+}
+
+message PricingInfo {
+  PricingModel model = 1;
+  string base_price = 2;
+  string currency = 3;
+  string unit = 4;  // per_request, per_token, per_hour, etc.
+  map<string, string> price_tiers = 5;
+}
+
+enum PricingModel {
+  PRICING_UNSPECIFIED = 0;
+  PRICING_FREE = 1;
+  PRICING_FIXED = 2;
+  PRICING_METERED = 3;
+  PRICING_SUBSCRIPTION = 4;
+  PRICING_NEGOTIABLE = 5;
+}
+
+message QualityMetrics {
+  float success_rate = 1;
+  uint32 avg_latency_ms = 2;
+  uint32 total_tasks = 3;
+  float avg_rating = 4;
+  uint32 review_count = 5;
+}
+
+message AgentEndpoint {
+  repeated string transport_protocols = 1;  // websocket, grpc, http
+  repeated string addresses = 2;
+  map<string, string> connection_params = 3;
+}
+
+message AgentReputation {
+  float overall_score = 1;
+  int32 successful_deals = 2;
+  int32 disputed_deals = 3;
+  string trust_tier = 4;
+  repeated string badges = 5;
+}
+
+// Capability announcement
+message CapabilityAnnouncement {
+  string agent_id = 1;
+  google.protobuf.Timestamp announced_at = 2;
+  int32 ttl_seconds = 3;
+  
+  repeated Capability capabilities = 10;
+  AgentEndpoint endpoint = 11;
+  
+  bytes signature = 20;
+}
+
+// DHT record
+message DHTRecord {
+  string key = 1;
+  bytes value = 2;
+  int64 timestamp = 3;
+  int64 ttl = 4;
+  repeated string publishers = 5;
+}

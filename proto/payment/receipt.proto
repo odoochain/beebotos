@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package beebotos.payment.receipt;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/payment";
+
+// Payment receipt protocol
+message PaymentReceipt {
+  string receipt_id = 1;
+  string transaction_hash = 2;
+  
+  // Parties
+  string payer = 3;
+  string payee = 4;
+  
+  // Payment details
+  string amount = 5;
+  string currency = 6;
+  string amount_in_base_units = 7;
+  
+  // Status
+  PaymentStatus status = 8;
+  int32 confirmations = 9;
+  
+  // Timing
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp confirmed_at = 11;
+  
+  // Context
+  string description = 12;
+  bytes metadata_hash = 13;
+  repeated LineItem line_items = 14;
+  
+  // Related entities
+  string mandate_id = 15;
+  string invoice_id = 16;
+  string deal_id = 17;
+  
+  // Verification
+  bytes proof = 20;
+}
+
+enum PaymentStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING = 1;
+  STATUS_CONFIRMED = 2;
+  STATUS_FAILED = 3;
+  STATUS_DISPUTED = 4;
+  STATUS_REFUNDED = 5;
+  STATUS_CANCELLED = 6;
+}
+
+message LineItem {
+  string description = 1;
+  int32 quantity = 2;
+  string unit_price = 3;
+  string total = 4;
+  string currency = 5;
+}
+
+// Receipt request
+message GetReceiptRequest {
+  string receipt_id = 1;
+}
+
+message GetReceiptResponse {
+  PaymentReceipt receipt = 1;
+  repeated ReceiptEvent events = 2;
+}
+
+message ReceiptEvent {
+  ReceiptEventType type = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  map<string, string> data = 3;
+}
+
+enum ReceiptEventType {
+  RECEIPT_EVENT_UNSPECIFIED = 0;
+  RECEIPT_CREATED = 1;
+  RECEIPT_CONFIRMED = 2;
+  RECEIPT_UPDATED = 3;
+  RECEIPT_DISPUTED = 4;
+  RECEIPT_REFUNDED = 5;
+}
+
+// Verify receipt
+message VerifyReceiptRequest {
+  string receipt_id = 1;
+  bytes proof = 2;
+}
+
+message VerifyReceiptResponse {
+  bool valid = 1;
+  string receipt_id = 2;
+  PaymentStatus current_status = 3;
+  int32 current_confirmations = 4;
+}
+
+// List receipts
+message ListReceiptsRequest {
+  string account = 1;  // As payer or payee
+  PaymentStatus filter_status = 2;
+  string currency = 3;
+  google.protobuf.Timestamp start_time = 4;
+  google.protobuf.Timestamp end_time = 5;
+  int32 page_size = 6;
+  string page_token = 7;
+}
+
+message ListReceiptsResponse {
+  repeated PaymentReceipt receipts = 1;
+  string next_page_token = 2;
+  map<string, string> totals = 3;  // currency -> total amount
+}
+
+// Receipt batch (for bulk operations)
+message ReceiptBatch {
+  string batch_id = 1;
+  repeated PaymentReceipt receipts = 2;
+  google.protobuf.Timestamp created_at = 3;
+  bytes merkle_root = 4;
+}
+
+// Generate receipt
+message GenerateReceiptRequest {
+  string transaction_hash = 1;
+  string payer = 2;
+  string payee = 3;
+  string amount = 4;
+  string currency = 5;
+  string description = 6;
+  repeated LineItem line_items = 7;
+}
+
+message GenerateReceiptResponse {
+  string receipt_id = 1;
+  PaymentReceipt receipt = 2;
+}

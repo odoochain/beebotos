@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+package beebotos.evolution.genome;
+
+option go_package = "github.com/beebotos/beebotos/proto/evolution";
+
+import "common/types.proto";
+
+message Genome {
+  string id = 1;
+  bytes genetic_code = 2;
+  repeated Gene genes = 3;
+  NeuralNetwork brain = 4;
+  Fitness fitness = 5;
+  uint32 generation = 6;
+  string species_id = 7;
+  repeated string parent_ids = 8;
+  int64 created_at = 9;
+}
+
+message Gene {
+  string id = 1;
+  GeneType gene_type = 2;
+  bytes value = 3;
+  bool enabled = 4;
+  repeated string innovation_history = 5;
+}
+
+enum GeneType {
+  GENE_TYPE_UNSPECIFIED = 0;
+  GENE_TYPE_SENSOR = 1;
+  GENE_TYPE_OUTPUT = 2;
+  GENE_TYPE_HIDDEN = 3;
+  GENE_TYPE_CONNECTION = 4;
+  GENE_TYPE_BIAS = 5;
+}
+
+message NeuralNetwork {
+  repeated Neuron neurons = 1;
+  repeated Connection connections = 2;
+  NetworkTopology topology = 3;
+}
+
+message Neuron {
+  string id = 1;
+  NeuronType neuron_type = 2;
+  ActivationFunction activation = 3;
+  double bias = 4;
+  repeated string input_connections = 5;
+  repeated string output_connections = 6;
+}
+
+enum NeuronType {
+  NEURON_TYPE_UNSPECIFIED = 0;
+  NEURON_TYPE_INPUT = 1;
+  NEURON_TYPE_HIDDEN = 2;
+  NEURON_TYPE_OUTPUT = 3;
+}
+
+enum ActivationFunction {
+  ACTIVATION_UNSPECIFIED = 0;
+  ACTIVATION_SIGMOID = 1;
+  ACTIVATION_TANH = 2;
+  ACTIVATION_RELU = 3;
+  ACTIVATION_LEAKY_RELU = 4;
+  ACTIVATION_LINEAR = 5;
+  ACTIVATION_SWISH = 6;
+  ACTIVATION_GELU = 7;
+}
+
+message Connection {
+  string id = 1;
+  string from_neuron = 2;
+  string to_neuron = 3;
+  double weight = 4;
+  bool enabled = 5;
+  uint32 innovation_number = 6;
+}
+
+message NetworkTopology {
+  uint32 input_count = 1;
+  uint32 output_count = 2;
+  uint32 hidden_count = 3;
+  uint32 connection_count = 4;
+  uint32 layer_count = 5;
+}
+
+message Fitness {
+  double raw_score = 1;
+  double adjusted_score = 2;
+  uint32 rank = 3;
+  map<string, double> metrics = 4;
+  uint32 evaluations = 5;
+}
+
+message Species {
+  string id = 1;
+  string representative_id = 2;
+  repeated string member_ids = 3;
+  double compatibility_threshold = 4;
+  uint32 age = 5;
+  uint32 generations_no_improvement = 6;
+  double best_fitness_ever = 7;
+  bool is_stagnant = 8;
+}
+
+message EvolutionConfig {
+  uint32 population_size = 1;
+  uint32 max_generations = 2;
+  double mutation_rate = 3;
+  double crossover_rate = 4;
+  double elitism_ratio = 5;
+  double compatibility_threshold = 6;
+  uint32 stagnation_threshold = 7;
+  uint32 target_species_count = 8;
+  
+  MutationConfig mutation = 10;
+  SelectionConfig selection = 11;
+}
+
+message MutationConfig {
+  double add_neuron_prob = 1;
+  double add_connection_prob = 2;
+  double remove_neuron_prob = 3;
+  double remove_connection_prob = 4;
+  double weight_mutate_prob = 5;
+  double weight_replace_prob = 6;
+  double bias_mutate_prob = 7;
+  double activation_mutate_prob = 8;
+  double enable_disable_prob = 9;
+  double weight_perturbation_scale = 10;
+}
+
+message SelectionConfig {
+  SelectionType selection_type = 1;
+  uint32 tournament_size = 2;
+  double selection_pressure = 3;
+}
+
+enum SelectionType {
+  SELECTION_UNSPECIFIED = 0;
+  SELECTION_TOURNAMENT = 1;
+  SELECTION_ROULETTE = 2;
+  SELECTION_RANK = 3;
+  SELECTION_TRUNCATED = 4;
+}
+
+message EvolutionState {
+  uint32 current_generation = 1;
+  repeated Species species = 2;
+  repeated Genome population = 3;
+  Genome best_genome = 4;
+  double best_fitness = 5;
+  double average_fitness = 6;
+  bool converged = 7;
+  int64 last_update = 8;
+}
+
+service EvolutionService {
+  rpc InitializePopulation(InitializeRequest) returns (EvolutionState);
+  rpc EvolveGeneration(EvolveRequest) returns (EvolutionState);
+  rpc EvaluateFitness(EvaluateRequest) returns (Fitness);
+  rpc GetBestGenome(GetBestRequest) returns (Genome);
+  rpc ExportGenome(ExportRequest) returns (ExportResponse);
+  rpc ImportGenome(ImportRequest) returns (Genome);
+  rpc StreamEvolution(StreamEvolutionRequest) returns (stream EvolutionState);
+}
+
+message InitializeRequest {
+  EvolutionConfig config = 1;
+  uint32 seed = 2;
+}
+
+message EvolveRequest {
+  string evolution_id = 1;
+  uint32 generations = 2;
+}
+
+message EvaluateRequest {
+  string genome_id = 1;
+  bytes task_input = 2;
+}
+
+message GetBestRequest {
+  string evolution_id = 1;
+}
+
+message ExportRequest {
+  string genome_id = 1;
+  ExportFormat format = 2;
+}
+
+enum ExportFormat {
+  EXPORT_UNSPECIFIED = 0;
+  EXPORT_BINARY = 1;
+  EXPORT_JSON = 2;
+  EXPORT_PROTO = 3;
+  EXPORT_ONNX = 4;
+}
+
+message ExportResponse {
+  bytes data = 1;
+  string format = 2;
+}
+
+message ImportRequest {
+  bytes data = 1;
+  ImportFormat format = 2;
+}
+
+enum ImportFormat {
+  IMPORT_UNSPECIFIED = 0;
+  IMPORT_BINARY = 1;
+  IMPORT_JSON = 2;
+  IMPORT_PROTO = 3;
+}
+
+message StreamEvolutionRequest {
+  string evolution_id = 1;
+  uint32 update_interval_ms = 2;
+}

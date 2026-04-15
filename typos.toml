@@ -1,0 +1,15 @@
+[default]
+extend-ignore-identifiers-re = [
+    ".* bee.*",
+    ".*Bee.*",
+]
+
+[files]
+extend-exclude = [
+    "target/**",
+    "node_modules/**",
+    "Cargo.lock",
+]
+
+[default.extend-words]
+# Add any false positives here

@@ -1,0 +1,42 @@
+# BeeBotOS DAO Service Dockerfile
+FROM rust:1.75-slim-bookworm as builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY crates/*/Cargo.toml ./crates/*/
+
+COPY crates ./crates
+COPY proto ./proto
+
+RUN cargo build --release -p beebotos-dao --bin dao-service
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -u 1000 beebotos
+
+WORKDIR /app
+
+COPY --from=builder /build/target/release/dao-service /usr/local/bin/
+
+RUN mkdir -p data/dao && chown -R beebotos:beebotos data
+
+USER beebotos
+
+EXPOSE 8083
+
+ENV DAO_DATA_DIR=data/dao
+ENV RUST_LOG=info
+
+ENTRYPOINT ["dao-service"]

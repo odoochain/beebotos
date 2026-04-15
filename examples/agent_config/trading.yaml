@@ -1,0 +1,115 @@
+# Trading agent configuration
+
+name: crypto-trader
+description: Automated cryptocurrency trading agent
+version: "2.1.0"
+category: finance
+
+runtime:
+  memory_limit: 512MB
+  cpu_limit: 500ms
+  timeout: 60s
+  tee_required: true  # Requires secure enclave
+
+# Higher capability level for trading
+capabilities:
+  - L0_LocalCompute
+  - L1_FileRead
+  - L2_FileWrite
+  - L3_NetworkOut
+  - L4_NetworkIn
+  - L7_ChainRead
+  - L8_ChainWriteLow
+
+skills:
+  - name: market-data
+    version: "1.0.0"
+    source: https://beehub.beebotos.io/skills/market-data/2.0.0
+    config:
+      exchanges:
+        - binance
+        - coinbase
+      update_interval: 5s
+      
+  - name: technical-analysis
+    version: "1.5.0"
+    config:
+      indicators:
+        - rsi
+        - macd
+        - bollinger_bands
+        - ema
+        
+  - name: risk-manager
+    version: "1.2.0"
+    config:
+      max_position_size: 0.1  # 10% of portfolio
+      max_drawdown: 0.05      # 5%
+      stop_loss: 0.02         # 2%
+      take_profit: 0.05       # 5%
+      
+  - name: trade-executor
+    version: "1.3.0"
+    config:
+      exchange: binance
+      order_type: limit
+      slippage_tolerance: 0.001
+
+# Trading strategy
+strategy:
+  name: momentum_with_mean_reversion
+  parameters:
+    momentum_weight: 0.6
+    mean_reversion_weight: 0.4
+    lookback_period: 24h
+    rebalance_threshold: 0.02
+
+triggers:
+  - type: schedule
+    cron: "*/5 * * * *"  # Every 5 minutes
+    
+  - type: event
+    source: market-data
+    condition: price_change > 0.02  # 2% price move
+
+# Risk controls
+risk_controls:
+  daily_loss_limit: 1000  # USD
+  max_open_positions: 5
+  circuit_breaker:
+    enabled: true
+    threshold: 0.05  # 5% daily loss triggers halt
+    
+# Monitoring
+monitoring:
+  metrics:
+    - pnl
+    - sharpe_ratio
+    - max_drawdown
+    - trade_count
+    - win_rate
+  
+  alerts:
+    - condition: daily_pnl < -500
+      channel: email
+      recipient: risk@example.com
+      severity: warning
+      
+    - condition: drawdown > 0.03
+      channel: webhook
+      url: ${ALERT_WEBHOOK}
+      severity: critical
+
+# Compliance
+compliance:
+  trading_hours:
+    enabled: true
+    timezone: UTC
+    sessions:
+      - start: "00:00"
+        end: "23:59"
+  
+  reporting:
+    enabled: true
+    destination: ${COMPLIANCE_ENDPOINT}
+    frequency: daily

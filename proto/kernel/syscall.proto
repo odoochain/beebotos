@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package beebotos.kernel;
+
+option go_package = "github.com/beebotos/api/kernel";
+
+// Kernel syscall protocol
+
+message SyscallRequest {
+  uint64 syscall_number = 1;
+  uint64 task_id = 2;
+  uint64 agent_id = 3;
+  repeated bytes arguments = 4;
+  uint64 timeout_ms = 5;
+}
+
+message SyscallResponse {
+  uint64 syscall_number = 1;
+  uint64 task_id = 2;
+  int32 exit_code = 3;
+  bytes result = 4;
+  string error_message = 5;
+  uint64 execution_time_ns = 6;
+}
+
+message TaskEvent {
+  uint64 task_id = 1;
+  uint64 agent_id = 2;
+  TaskState old_state = 3;
+  TaskState new_state = 4;
+  int64 timestamp = 5;
+  string reason = 6;
+}
+
+enum TaskState {
+  PENDING = 0;
+  RUNNING = 1;
+  BLOCKED = 2;
+  COMPLETED = 3;
+  FAILED = 4;
+  CANCELED = 5;
+}
+
+message ResourceUsage {
+  uint64 task_id = 1;
+  uint64 cpu_time_ms = 2;
+  uint64 memory_bytes = 3;
+  uint64 io_read_bytes = 4;
+  uint64 io_write_bytes = 5;
+  uint64 network_bytes = 6;
+}
+
+message CapabilityCheck {
+  uint64 agent_id = 1;
+  uint32 required_level = 2;
+  string resource = 3;
+  bool granted = 4;
+  string reason = 5;
+}

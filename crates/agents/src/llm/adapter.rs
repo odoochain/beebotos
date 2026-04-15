@@ -1,0 +1,114 @@
+//! LLM Adapter - Bridge between old and new LLM interfaces
+//!
+//! Provides compatibility between the legacy `LLMCallInterface` and
+//! the new comprehensive `LLMClient`.
+
+use std::collections::HashMap;
+use async_trait::async_trait;
+use tokio::sync::mpsc;
+
+use crate::communication::{LLMCallInterface, Message as CommMessage};
+use crate::llm::{LLMClient, Message as LLMMessage, Role};
+use crate::error::Result as AgentResult;
+
+/// Adapter that wraps the new LLMClient to implement the legacy LLMCallInterface
+pub struct LLMClientAdapter {
+    client: LLMClient,
+}
+
+impl LLMClientAdapter {
+    /// Create new adapter
+    pub fn new(client: LLMClient) -> Self {
+        Self { client }
+    }
+
+    /// Convert communication message to LLM message
+    fn convert_message(msg: CommMessage) -> LLMMessage {
+        let role = match msg.platform {
+            crate::communication::PlatformType::Custom => Role::System,
+            _ => Role::User,
+        };
+
+        let mut message = LLMMessage::text(role, msg.content);
+
+        if let Some(image_urls_json) = msg.metadata.get("image_urls") {
+            if let Ok(image_urls) = serde_json::from_str::<Vec<String>>(image_urls_json) {
+                for url in image_urls {
+                    message = message.with_image(url);
+                }
+            }
+        }
+
+        message
+    }
+}
+
+#[async_trait]
+impl LLMCallInterface for LLMClientAdapter {
+    async fn call_llm(
+        &self,
+        messages: Vec<CommMessage>,
+        _context: Option<HashMap<String, String>>,
+    ) -> AgentResult<String> {
+        // Convert messages
+        let llm_messages: Vec<LLMMessage> = messages
+            .into_iter()
+            .map(Self::convert_message)
+            .collect();
+
+        // Add messages to client context
+        for _msg in llm_messages {
+            // Note: This is a simplified implementation
+            // In production, you'd manage context properly
+        }
+
+        // Get last user message
+        let last_message = self.client.get_history().await
+            .into_iter()
+            .last()
+            .map(|m| m.text_content())
+            .unwrap_or_default();
+
+        // Execute chat
+        let response = self.client.chat(&last_message).await
+            .map_err(|e| crate::error::AgentError::Execution(e.to_string()))?;
+
+        Ok(response)
+    }
+
+    async fn call_llm_stream(
+        &self,
+        messages: Vec<CommMessage>,
+        _context: Option<HashMap<String, String>>,
+    ) -> AgentResult<mpsc::Receiver<String>> {
+        // Convert messages and stream
+        let last_msg = messages
+            .into_iter()
+            .last()
+            .map(|m| m.content)
+            .unwrap_or_default();
+
+        let rx = self.client.chat_stream(&last_msg).await
+            .map_err(|e| crate::error::AgentError::Execution(e.to_string()))?;
+
+        Ok(rx)
+    }
+}
+
+/// Builder for creating LLMClient with legacy interface
+pub struct LegacyLLMClientBuilder;
+
+impl LegacyLLMClientBuilder {
+    /// Build from environment (Kimi)
+    pub async fn from_env() -> AgentResult<Box<dyn LLMCallInterface>> {
+        let client = crate::llm::create_kimi_client().await
+            .map_err(|e| crate::error::AgentError::InvalidConfig(e.to_string()))?;
+
+        Ok(Box::new(LLMClientAdapter::new(client)))
+    }
+
+    /// Build with custom client
+    pub fn with_client(client: LLMClient) -> Box<dyn LLMCallInterface> {
+        Box::new(LLMClientAdapter::new(client))
+    }
+}

@@ -1,0 +1,27 @@
+[package]
+name = "beebotos-sdk"
+version = "1.0.0"
+edition = "2021"
+description = "SDK for developing BeeBotOS skills"
+license = "MIT"
+repository = "https://github.com/beebotos/beebotos"
+keywords = ["beebotos", "sdk", "wasm", "agent", "skill"]
+categories = ["wasm", "development-tools"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+tracing = { version = "0.1", optional = true }
+
+# HTTP client (for host-side usage)
+reqwest = { version = "0.11", optional = true, features = ["json"] }
+
+[features]
+default = ["std"]
+std = ["reqwest", "tracing"]
+wasm = []
+
+[dev-dependencies]
+tokio = { version = "1.36", features = ["rt", "macros"] }

@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package beebotos.payment.mandate;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/payment";
+
+// Payment mandate protocol
+message PaymentMandate {
+  string mandate_id = 1;
+  string grantor = 2;  // Who gives the mandate
+  string grantee = 3;  // Who can use the mandate
+  
+  // Limits
+  string allowance = 4;     // Maximum amount
+  string spent = 5;         // Amount already spent
+  string remaining = 6;     // Remaining allowance
+  string currency = 7;
+  
+  // Validity
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp valid_until = 9;
+  bool active = 10;
+  
+  // Purpose restriction
+  bytes purpose_hash = 11;
+  repeated string allowed_recipients = 12;
+  map<string, string> metadata = 13;
+  
+  // Signature
+  bytes signature = 20;
+}
+
+// Create mandate request
+message CreateMandateRequest {
+  string grantor = 1;
+  string grantee = 2;
+  string allowance = 3;
+  string currency = 4;
+  google.protobuf.Duration duration = 5;
+  bytes purpose_hash = 6;
+  repeated string allowed_recipients = 7;
+}
+
+message CreateMandateResponse {
+  string mandate_id = 1;
+  bool success = 2;
+  string error_message = 3;
+}
+
+// Spend from mandate
+message SpendRequest {
+  string mandate_id = 1;
+  string grantee = 2;
+  string amount = 3;
+  string recipient = 4;
+  bytes usage_hash = 5;  // Hash describing the usage
+  string description = 6;
+}
+
+message SpendResponse {
+  bool success = 1;
+  string transaction_hash = 2;
+  string remaining = 3;
+  string error_message = 4;
+}
+
+// Revoke mandate
+message RevokeMandateRequest {
+  string mandate_id = 1;
+  string grantor = 2;
+  string reason = 3;
+}
+
+message RevokeMandateResponse {
+  bool success = 1;
+  google.protobuf.Timestamp revoked_at = 2;
+}
+
+// Query mandates
+message ListMandatesRequest {
+  string account = 1;  // As grantor or grantee
+  bool active_only = 2;
+}
+
+message ListMandatesResponse {
+  repeated PaymentMandate mandates = 1;
+}
+
+// Mandate events
+message MandateCreatedEvent {
+  string mandate_id = 1;
+  string grantor = 2;
+  string grantee = 3;
+  string allowance = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message MandateSpentEvent {
+  string mandate_id = 1;
+  string amount = 2;
+  string recipient = 3;
+  string remaining = 4;
+  google.protobuf.Timestamp spent_at = 5;
+}
+
+message MandateRevokedEvent {
+  string mandate_id = 1;
+  string revoked_by = 2;
+  string reason = 3;
+  google.protobuf.Timestamp revoked_at = 4;
+}
+
+message MandateExpiredEvent {
+  string mandate_id = 1;
+  google.protobuf.Timestamp expired_at = 2;
+}

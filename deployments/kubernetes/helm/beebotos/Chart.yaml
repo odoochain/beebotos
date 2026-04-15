@@ -1,0 +1,26 @@
+apiVersion: v2
+name: beebotos
+description: BeeBotOS - Web4.0 Autonomous Agent Operating System
+type: application
+version: 2.0.0
+appVersion: "1.0.0"
+keywords:
+  - agent
+  - ai
+  - blockchain
+  - dao
+home: https://beebotos.io
+sources:
+  - https://github.com/beebotos/beebotos
+maintainers:
+  - name: BeeBotOS Team
+    email: team@beebotos.io
+dependencies:
+  - name: postgresql
+    version: 12.x.x
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: 17.x.x
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled

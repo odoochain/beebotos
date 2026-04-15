@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package beebotos.common;
+
+option go_package = "github.com/beebotos/api/common";
+
+// Common types used across BeeBotOS
+
+message AgentId {
+  bytes id = 1;
+}
+
+message TaskId {
+  uint64 id = 1;
+}
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+
+message Hash {
+  bytes data = 1;
+  HashAlgorithm algorithm = 2;
+}
+
+enum HashAlgorithm {
+  SHA256 = 0;
+  SHA3_256 = 1;
+  KECCAK256 = 2;
+  BLAKE2B = 3;
+}
+
+message Signature {
+  bytes value = 1;
+  SignatureScheme scheme = 2;
+  bytes public_key = 3;
+}
+
+enum SignatureScheme {
+  ECDSA = 0;
+  ED25519 = 1;
+  BLS = 2;
+}
+
+message ResourceLimits {
+  uint64 memory_bytes = 1;
+  uint64 cpu_time_ms = 2;
+  uint64 network_bytes = 3;
+  uint64 storage_bytes = 4;
+}
+
+message Capability {
+  uint32 level = 1;
+  repeated string permissions = 2;
+  int64 expires_at = 3;
+}
+
+message Empty {}

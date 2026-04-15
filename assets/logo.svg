@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="beeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#FFD700"/>
+      <stop offset="100%" style="stop-color:#FFA500"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="45" fill="url(#beeGradient)" stroke="#333" stroke-width="2"/>
+  
+  <!-- Hexagon pattern (representing hive) -->
+  <g fill="none" stroke="#333" stroke-width="1.5" opacity="0.3">
+    <path d="M30 35 L40 30 L50 35 L50 45 L40 50 L30 45 Z"/>
+    <path d="M50 35 L60 30 L70 35 L70 45 L60 50 L50 45 Z"/>
+    <path d="M40 50 L50 45 L60 50 L60 60 L50 65 L40 60 Z"/>
+  </g>
+  
+  <!-- Bee body (simplified) -->
+  <ellipse cx="50" cy="55" rx="15" ry="20" fill="#333"/>
+  <ellipse cx="50" cy="40" rx="12" ry="10" fill="#FFD700"/>
+  
+  <!-- Stripes -->
+  <rect x="38" y="48" width="24" height="4" fill="#333" rx="2"/>
+  <rect x="38" y="56" width="24" height="4" fill="#333" rx="2"/>
+  
+  <!-- Wings -->
+  <ellipse cx="35" cy="45" rx="10" ry="15" fill="#FFF" opacity="0.6" transform="rotate(-30 35 45)"/>
+  <ellipse cx="65" cy="45" rx="10" ry="15" fill="#FFF" opacity="0.6" transform="rotate(30 65 45)"/>
+  
+  <!-- Antennae -->
+  <line x1="46" y1="32" x2="42" y2="25" stroke="#333" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="54" y1="32" x2="58" y2="25" stroke="#333" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Eyes -->
+  <circle cx="46" cy="38" r="2" fill="#FFF"/>
+  <circle cx="54" cy="38" r="2" fill="#FFF"/>
+  <circle cx="46" cy="38" r="1" fill="#333"/>
+  <circle cx="54" cy="38" r="1" fill="#333"/>
+</svg>

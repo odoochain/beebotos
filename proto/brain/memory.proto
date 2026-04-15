@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+package beebotos.brain.memory;
+
+option go_package = "github.com/beebotos/beebotos/proto/brain";
+
+import "common/types.proto";
+
+message MemoryQuery {
+  string agent_id = 1;
+  oneof query_type {
+    SemanticQuery semantic = 2;
+    TemporalQuery temporal = 3;
+    AssociativeQuery associative = 4;
+    EmotionalQuery emotional = 5;
+  }
+  uint32 limit = 6;
+  double min_confidence = 7;
+}
+
+message SemanticQuery {
+  string concept = 1;
+  repeated string related_concepts = 2;
+}
+
+message TemporalQuery {
+  int64 start_time = 1;
+  int64 end_time = 2;
+  repeated string event_types = 3;
+}
+
+message AssociativeQuery {
+  string memory_id = 1;
+  int32 hop_count = 2;
+}
+
+message EmotionalQuery {
+  repeated string emotion_types = 1;
+  double min_intensity = 2;
+  double max_intensity = 3;
+}
+
+message MemoryEntry {
+  string id = 1;
+  string agent_id = 2;
+  MemoryType memory_type = 3;
+  MemoryContent content = 4;
+  MemoryMetadata metadata = 5;
+  double importance = 6; // 0.0 to 1.0
+  int64 created_at = 7;
+  int64 last_accessed = 8;
+  int32 access_count = 9;
+}
+
+enum MemoryType {
+  MEMORY_TYPE_UNSPECIFIED = 0;
+  MEMORY_TYPE_EPISODIC = 1;
+  MEMORY_TYPE_SEMANTIC = 2;
+  MEMORY_TYPE_PROCEDURAL = 3;
+  MEMORY_TYPE_EMOTIONAL = 4;
+  MEMORY_TYPE_WORKING = 5;
+}
+
+message MemoryContent {
+  oneof content {
+    EpisodicMemory episodic = 1;
+    SemanticMemory semantic = 2;
+    ProceduralMemory procedural = 3;
+  }
+}
+
+message EpisodicMemory {
+  string event_description = 1;
+  string location = 2;
+  repeated string participants = 3;
+  repeated string outcomes = 4;
+  string emotional_tag = 5;
+}
+
+message SemanticMemory {
+  string subject = 1;
+  string predicate = 2;
+  string object = 3;
+  double certainty = 4; // 0.0 to 1.0
+  repeated string sources = 5;
+}
+
+message ProceduralMemory {
+  string task_name = 1;
+  repeated string steps = 2;
+  repeated string preconditions = 3;
+  repeated string postconditions = 4;
+  int32 success_count = 5;
+  int32 failure_count = 6;
+}
+
+message MemoryMetadata {
+  map<string, string> tags = 1;
+  repeated string related_memories = 2;
+  string source_agent = 3;
+  common.types.Context context = 4;
+}
+
+message ConsolidationResult {
+  bool success = 1;
+  repeated string consolidated_memory_ids = 2;
+  repeated string removed_memory_ids = 3;
+  int64 consolidation_time = 4;
+}
+
+message ForgettingResult {
+  bool success = 1;
+  repeated string forgotten_memory_ids = 2;
+  int32 total_forgotten = 3;
+}
+
+service MemoryService {
+  rpc StoreMemory(StoreMemoryRequest) returns (StoreMemoryResponse);
+  rpc RetrieveMemory(RetrieveMemoryRequest) returns (RetrieveMemoryResponse);
+  rpc QueryMemories(QueryMemoriesRequest) returns (QueryMemoriesResponse);
+  rpc UpdateMemory(UpdateMemoryRequest) returns (UpdateMemoryResponse);
+  rpc DeleteMemory(DeleteMemoryRequest) returns (DeleteMemoryResponse);
+  rpc ConsolidateMemories(ConsolidateMemoriesRequest) returns (ConsolidationResult);
+  rpc ApplyForgettingCurve(ApplyForgettingCurveRequest) returns (ForgettingResult);
+  rpc CreateAssociation(CreateAssociationRequest) returns (CreateAssociationResponse);
+  rpc GetMemoryGraph(GetMemoryGraphRequest) returns (MemoryGraph);
+}
+
+message StoreMemoryRequest {
+  MemoryEntry memory = 1;
+}
+
+message StoreMemoryResponse {
+  string memory_id = 1;
+  bool success = 2;
+  repeated string similar_memories = 3;
+}
+
+message RetrieveMemoryRequest {
+  string memory_id = 1;
+  string agent_id = 2;
+}
+
+message RetrieveMemoryResponse {
+  MemoryEntry memory = 1;
+  bool found = 2;
+}
+
+message QueryMemoriesRequest {
+  MemoryQuery query = 1;
+}
+
+message QueryMemoriesResponse {
+  repeated MemoryEntry memories = 1;
+  uint32 total_count = 2;
+}
+
+message UpdateMemoryRequest {
+  string memory_id = 1;
+  MemoryContent new_content = 2;
+  double importance_delta = 3;
+}
+
+message UpdateMemoryResponse {
+  bool success = 1;
+  MemoryEntry updated_memory = 2;
+}
+
+message DeleteMemoryRequest {
+  string memory_id = 1;
+  string agent_id = 2;
+}
+
+message DeleteMemoryResponse {
+  bool success = 1;
+}
+
+message ConsolidateMemoriesRequest {
+  string agent_id = 1;
+  repeated string memory_ids = 2;
+  int64 max_age_hours = 3;
+}
+
+message ApplyForgettingCurveRequest {
+  string agent_id = 1;
+  double retention_threshold = 2; // 0.0 to 1.0
+}
+
+message CreateAssociationRequest {
+  string from_memory_id = 1;
+  string to_memory_id = 2;
+  double strength = 3; // 0.0 to 1.0
+  string association_type = 4;
+}
+
+message CreateAssociationResponse {
+  bool success = 1;
+  string association_id = 2;
+}
+
+message GetMemoryGraphRequest {
+  string agent_id = 1;
+  string center_memory_id = 2;
+  int32 depth = 3;
+}
+
+message MemoryGraph {
+  repeated MemoryGraphNode nodes = 1;
+  repeated MemoryGraphEdge edges = 2;
+}
+
+message MemoryGraphNode {
+  string memory_id = 1;
+  MemoryType memory_type = 2;
+  string summary = 3;
+  double importance = 4;
+}
+
+message MemoryGraphEdge {
+  string from_memory_id = 1;
+  string to_memory_id = 2;
+  double weight = 3;
+  string relation_type = 4;
+}

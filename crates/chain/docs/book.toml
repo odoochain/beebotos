@@ -1,0 +1,51 @@
+[book]
+authors = ["BeeBotOS Team"]
+language = "en"
+multilingual = false
+src = "src"
+title = "BeeBotOS Chain Documentation"
+description = "Complete documentation for BeeBotOS Chain module"
+
+[build]
+build-dir = "book"
+create-missing = true
+
+[preprocessor.index]
+
+[preprocessor.links]
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+curly-quotes = true
+copy-fonts = true
+mathjax-support = true
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 2
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[output.html.print]
+enable = true
+
+[output.html.git-repository-url]
+url = "https://github.com/beebotos/beebotos"
+
+[output.html.git-repository-icon]
+icon = "fa-github"
+
+[output.html.site-url]
+url = "/beebotos-chain/"
+
+[output.markdown]

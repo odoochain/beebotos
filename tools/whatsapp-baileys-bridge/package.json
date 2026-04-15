@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-baileys-bridge",
+  "version": "1.0.0",
+  "description": "Baileys-based WhatsApp bridge for BeeBotOS",
+  "main": "whatsapp-baileys-bridge.js",
+  "scripts": {
+    "start": "node whatsapp-baileys-bridge.js",
+    "dev": "node whatsapp-baileys-bridge.js --dev"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "pino": "^8.17.0",
+    "pino-pretty": "^10.3.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "beebotos",
+    "bridge"
+  ],
+  "license": "MIT"
+}

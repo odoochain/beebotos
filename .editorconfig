@@ -1,0 +1,32 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{rs,toml}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+[*.{js,ts,tsx}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+
+[*.{sol}]
+indent_style = space
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = 80
+
+[Makefile]
+indent_style = tab

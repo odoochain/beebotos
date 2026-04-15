@@ -1,0 +1,183 @@
+// DAO Governance Protocol
+// Human + Agent hybrid governance
+
+syntax = "proto3";
+
+package beebotos.dao;
+
+option go_package = "github.com/beebotos/beebotos/proto/dao";
+
+// DAO governance service
+service DAOGovernance {
+  // Proposals
+  rpc CreateProposal(CreateProposalRequest) returns (CreateProposalResponse);
+  rpc GetProposal(GetProposalRequest) returns (Proposal);
+  rpc ListProposals(ListProposalsRequest) returns (ListProposalsResponse);
+  
+  // Voting
+  rpc CastVote(CastVoteRequest) returns (CastVoteResponse);
+  rpc GetVotingPower(GetVotingPowerRequest) returns (GetVotingPowerResponse);
+  
+  // Delegation
+  rpc SetDelegation(SetDelegationRequest) returns (SetDelegationResponse);
+  rpc GetDelegation(GetDelegationRequest) returns (GetDelegationResponse);
+  
+  // Treasury
+  rpc CreateBudget(CreateBudgetRequest) returns (CreateBudgetResponse);
+  rpc GetTreasuryStatus(GetTreasuryStatusRequest) returns (TreasuryStatus);
+}
+
+// Proposal creation
+message CreateProposalRequest {
+  string proposer_did = 1;
+  repeated ProposalAction actions = 2;
+  string description = 3;
+  bool is_autonomous = 4;
+  string reasoning_uri = 5;
+}
+
+message ProposalAction {
+  string target = 1;
+  string value = 2;
+  bytes calldata = 3;
+}
+
+message CreateProposalResponse {
+  uint64 proposal_id = 1;
+  bool success = 2;
+  string error = 3;
+}
+
+// Get proposal
+message GetProposalRequest {
+  uint64 proposal_id = 1;
+}
+
+message Proposal {
+  uint64 id = 1;
+  string proposer = 2;
+  ProposalType proposal_type = 3;
+  ProposalState state = 4;
+  uint64 start_block = 5;
+  uint64 end_block = 6;
+  uint64 for_votes = 7;
+  uint64 against_votes = 8;
+  uint64 abstain_votes = 9;
+  string description = 10;
+  bool is_autonomous = 11;
+  string reasoning_uri = 12;
+}
+
+enum ProposalType {
+  PARAMETER_CHANGE = 0;
+  TREASURY_SPEND = 1;
+  MEMBER_MANAGEMENT = 2;
+  CONTRACT_UPGRADE = 3;
+  STRATEGY_EXECUTION = 4;
+  EMERGENCY_ACTION = 5;
+}
+
+enum ProposalState {
+  PENDING = 0;
+  ACTIVE = 1;
+  CANCELED = 2;
+  DEFEATED = 3;
+  SUCCEEDED = 4;
+  QUEUED = 5;
+  EXPIRED = 6;
+  EXECUTED = 7;
+}
+
+// List proposals
+message ListProposalsRequest {
+  ProposalState state_filter = 1;
+  uint64 offset = 2;
+  uint64 limit = 3;
+}
+
+message ListProposalsResponse {
+  repeated Proposal proposals = 1;
+  uint64 total = 2;
+}
+
+// Cast vote
+message CastVoteRequest {
+  uint64 proposal_id = 1;
+  string voter_did = 2;
+  VoteType vote = 3;
+  string reasoning = 4;
+}
+
+enum VoteType {
+  AGAINST = 0;
+  FOR = 1;
+  ABSTAIN = 2;
+}
+
+message CastVoteResponse {
+  bool success = 1;
+  uint64 voting_power = 2;
+  string tx_hash = 3;
+}
+
+// Voting power
+message GetVotingPowerRequest {
+  string account = 1;
+  uint64 block_number = 2;
+}
+
+message GetVotingPowerResponse {
+  uint64 raw_votes = 1;
+  uint64 weighted_votes = 2;
+  uint64 reputation_score = 3;
+}
+
+// Delegation
+message SetDelegationRequest {
+  string delegator = 1;
+  string delegate = 2;
+}
+
+message SetDelegationResponse {
+  bool success = 1;
+  string tx_hash = 2;
+}
+
+message GetDelegationRequest {
+  string delegator = 1;
+}
+
+message GetDelegationResponse {
+  string delegate = 1;
+  uint64 delegated_power = 2;
+}
+
+// Budget
+message CreateBudgetRequest {
+  string beneficiary = 1;
+  string amount = 2;
+  uint64 duration = 3;
+  BudgetType budget_type = 4;
+}
+
+enum BudgetType {
+  OPERATIONAL = 0;
+  DEVELOPMENT = 1;
+  MARKETING = 2;
+  RESEARCH = 3;
+}
+
+message CreateBudgetResponse {
+  uint64 budget_id = 1;
+  bool success = 2;
+}
+
+// Treasury status
+message GetTreasuryStatusRequest {}
+
+message TreasuryStatus {
+  string total_balance = 1;
+  string available_balance = 2;
+  uint64 active_budgets = 3;
+  uint64 active_streams = 4;
+}

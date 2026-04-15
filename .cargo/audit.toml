@@ -1,0 +1,38 @@
+# BeeBotOS Security Audit Configuration
+# 
+# This file configures cargo-audit behavior for known vulnerabilities
+# that cannot be immediately fixed due to upstream dependencies.
+
+[advisories]
+# Vulnerabilities to ignore (with justification)
+ignore = [
+    # RUSTSEC-2025-0009: ring 0.16.20 AES panic
+    # Reason: Blocked by upstream dependencies (ethers 2.0, libp2p 0.53)
+    # These crates have not yet released updates using ring 0.17+
+    # Tracking: ethers-rs/ethers#2567, libp2p/rust-libp2p#5818
+    "RUSTSEC-2025-0009",
+    
+    # RUSTSEC-2025-0010: ring <0.17 unmaintained  
+    # Reason: Same as above - blocked by ethers and libp2p
+    "RUSTSEC-2025-0010",
+    
+    # RUSTSEC-2023-0071: rsa Marvin Attack
+    # Reason: No fixed version available from sqlx-mysql
+    # Impact: Medium severity, requires local access and timing analysis
+    # Workaround: Disable MySQL support if not needed (use SQLite only)
+    "RUSTSEC-2023-0071",
+]
+
+# Informational advisories to ignore
+informational_warnings = [
+    "unmaintained",  # Warnings about unmaintained crates
+    "unsound",       # Warnings about unsound APIs
+    "yanked",        # Warnings about yanked crates
+]
+
+[output]
+# Show dependency tree for better context
+quiet = false
+show_tree = true
+
+# [packages] section removed - not supported by current cargo-audit version

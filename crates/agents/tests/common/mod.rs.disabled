@@ -1,0 +1,67 @@
+//! Test utilities for agent tests
+
+use std::sync::Arc;
+
+use beebotos_agents::models::router::ModelRouter;
+use beebotos_agents::skills::SkillRegistry;
+use beebotos_agents::{Agent, AgentBuilder, Task, TaskType};
+
+/// Test environment for agent tests
+pub struct TestEnvironment {
+    pub skill_registry: Arc<SkillRegistry>,
+    pub model_router: Arc<ModelRouter>,
+}
+
+impl TestEnvironment {
+    pub async fn new() -> Self {
+        let skill_registry = Arc::new(SkillRegistry::new());
+        let model_router = Arc::new(ModelRouter::new("test"));
+
+        Self {
+            skill_registry,
+            model_router,
+        }
+    }
+
+    /// Create a test agent with basic configuration
+    pub async fn create_agent(&self, name: &str) -> Agent {
+        let mut agent = AgentBuilder::new(name)
+            .description("Test agent")
+            .with_capability("test")
+            .build();
+
+        agent = agent.with_skill_registry(self.skill_registry.clone());
+
+        agent
+            .initialize()
+            .await
+            .expect("Failed to initialize agent");
+        agent
+    }
+
+    /// Create a test task
+    pub fn create_task(&self, task_type: &str, input: &str) -> Task {
+        Task {
+            id: format!("test-task-{}", uuid::Uuid::new_v4()),
+            task_type: TaskType::Custom(task_type.to_string()),
+            input: input.to_string(),
+            parameters: std::collections::HashMap::new(),
+        }
+    }
+}
+
+/// Test assertion helpers
+pub fn assert_task_success(result: &beebotos_agents::TaskResult) {
+    assert!(result.success, "Task failed: {}", result.output);
+    assert!(!result.output.is_empty(), "Task output is empty");
+}
+
+/// Async test helper with timeout
+pub async fn with_timeout<F, T>(duration: std::time::Duration, f: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::time::timeout(duration, f)
+        .await
+        .expect("Test timed out")
+}

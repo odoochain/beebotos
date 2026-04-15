@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package beebotos.common.error;
+
+option go_package = "github.com/beebotos/beebotos/proto/common";
+
+// Standard error definitions for BeeBotOS
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+  string details = 3;
+  map<string, string> metadata = 4;
+  
+  // Stack trace (in debug mode)
+  repeated StackFrame stack_trace = 5;
+  
+  // Retry information
+  RetryInfo retry_info = 6;
+}
+
+enum ErrorCode {
+  // General errors (1-99)
+  UNKNOWN = 0;
+  CANCELLED = 1;
+  INVALID_ARGUMENT = 2;
+  DEADLINE_EXCEEDED = 3;
+  NOT_FOUND = 4;
+  ALREADY_EXISTS = 5;
+  PERMISSION_DENIED = 6;
+  RESOURCE_EXHAUSTED = 7;
+  FAILED_PRECONDITION = 8;
+  ABORTED = 9;
+  OUT_OF_RANGE = 10;
+  UNIMPLEMENTED = 11;
+  INTERNAL = 12;
+  UNAVAILABLE = 13;
+  DATA_LOSS = 14;
+  UNAUTHENTICATED = 15;
+  
+  // Kernel errors (100-199)
+  KERNEL_ERROR = 100;
+  KERNEL_TASK_FAILED = 101;
+  KERNEL_MEMORY_ERROR = 102;
+  KERNEL_SYSCALL_ERROR = 103;
+  KERNEL_SECURITY_VIOLATION = 104;
+  KERNEL_RESOURCE_EXHAUSTED = 105;
+  
+  // Agent errors (200-299)
+  AGENT_ERROR = 200;
+  AGENT_NOT_FOUND = 201;
+  AGENT_ALREADY_RUNNING = 202;
+  AGENT_EXECUTION_ERROR = 203;
+  AGENT_TIMEOUT = 204;
+  AGENT_SKILL_ERROR = 205;
+  
+  // A2A errors (300-399)
+  A2A_ERROR = 300;
+  A2A_NEGOTIATION_FAILED = 301;
+  A2A_DEAL_REJECTED = 302;
+  A2A_PAYMENT_FAILED = 303;
+  A2A_DISPUTE_RAISED = 304;
+  A2A_CAPABILITY_NOT_FOUND = 305;
+  
+  // DAO errors (400-499)
+  DAO_ERROR = 400;
+  DAO_PROPOSAL_NOT_FOUND = 401;
+  DAO_VOTING_CLOSED = 402;
+  DAO_ALREADY_VOTED = 403;
+  DAO_BELOW_THRESHOLD = 404;
+  DAO_QUORUM_NOT_REACHED = 405;
+  DAO_EXECUTION_FAILED = 406;
+  
+  // Chain errors (500-599)
+  CHAIN_ERROR = 500;
+  CHAIN_CONNECTION_ERROR = 501;
+  CHAIN_TRANSACTION_FAILED = 502;
+  CHAIN_INSUFFICIENT_FUNDS = 503;
+  CHAIN_NONCE_ERROR = 504;
+  CHAIN_GAS_ERROR = 505;
+  
+  // Storage errors (600-699)
+  STORAGE_ERROR = 600;
+  STORAGE_NOT_FOUND = 601;
+  STORAGE_WRITE_ERROR = 602;
+  STORAGE_READ_ERROR = 603;
+  STORAGE_QUOTA_EXCEEDED = 604;
+}
+
+message StackFrame {
+  string file = 1;
+  int32 line = 2;
+  string function = 3;
+}
+
+message RetryInfo {
+  bool retryable = 1;
+  int32 max_retries = 2;
+  int32 retry_delay_ms = 3;
+  string retry_after = 4;
+}
+
+// Error details for specific error types
+message ValidationError {
+  string field = 1;
+  string constraint = 2;
+  string message = 3;
+}
+
+message ResourceInfo {
+  string resource_type = 1;
+  string resource_name = 2;
+  string owner = 3;
+  string description = 4;
+}
+
+message QuotaFailure {
+  string subject = 1;
+  string quota = 2;
+  string used = 3;
+  string limit = 4;
+}
+
+// Error response wrapper
+message ErrorResponse {
+  repeated Error errors = 1;
+  string request_id = 2;
+  string trace_id = 3;
+}

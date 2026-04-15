@@ -1,0 +1,27 @@
+# BeeBotOS Web 服务器配置
+
+[server]
+host = "0.0.0.0"
+port = 8090
+
+[static_file]
+# 静态文件根目录（相对于可执行文件或绝对路径）
+path = "apps/web"
+# 默认索引文件
+index = "index.html"
+# 缓存控制（开发模式可禁用）
+cache_max_age = 3600
+
+[proxy]
+# 后端 Gateway 地址
+gateway_url = "http://localhost:8000"
+# 代理超时（秒）
+timeout_secs = 30
+# 是否转发原始 Host 头
+forward_host = false
+
+[log]
+# 日志级别: trace, debug, info, warn, error
+level = "info"
+# 格式: compact, pretty, json
+format = "compact"

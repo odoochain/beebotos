@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runtime
+  namespace: beebotos
+  labels:
+    app: agent-runtime
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-runtime
+  template:
+    metadata:
+      labels:
+        app: agent-runtime
+    spec:
+      containers:
+        - name: agent
+          image: beebotos/agent:v2.0.0
+          command: ["beebotos"]
+          args: ["agent", "serve"]
+          env:
+            - name: RUST_LOG
+              value: "info"
+            - name: GATEWAY_URL
+              value: "http://gateway:80"
+            - name: AGENT_DATA_DIR
+              value: "data"
+          volumeMounts:
+            - name: data
+              mountPath: data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      volumes:
+        - name: data
+          emptyDir: {}

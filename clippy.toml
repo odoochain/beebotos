@@ -1,0 +1,49 @@
+# Clippy configuration for BeeBotOS
+
+# Allow certain lints that are too strict for our use case
+avoid-breaking-exported-api = false
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 30
+
+# Too many arguments threshold
+too-many-arguments-threshold = 7
+
+# Type complexity threshold
+type-complexity-threshold = 300
+
+# Large error threshold
+large-error-threshold = 256
+
+# Maximum size of enum variants
+enum-variant-size-threshold = 200
+
+# Maximum lines in a function (replaces deprecated function-length-threshold)
+too-many-lines-threshold = 100
+
+# Doc valid idents (replaces deprecated doc-markdown)
+doc-valid-idents = [
+    "OpenAI",
+    "Claude",
+    "Ollama",
+    "LLM",
+    "AI",
+    "API",
+    "HTTP",
+    "URL",
+    "JSON",
+    "WASM",
+    "BeeBotOS",
+    "DAO",
+    "DeFi",
+    "NFT",
+    "MCP",
+    "A2A",
+    "DID",
+    "TEE",
+    "GPU",
+    "CPU",
+    "RAM",
+    "SSD",
+    "gRPC",
+]

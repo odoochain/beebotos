@@ -1,0 +1,56 @@
+# Contract Deployment Configuration
+# Copy this file to config.local.toml and fill in your values
+
+[networks]
+
+[networks.local]
+name = "Local Anvil"
+rpc_url = "http://localhost:8545"
+chain_id = 31337
+private_key_env = "LOCAL_PRIVATE_KEY"
+verify = false
+
+[networks.monad_testnet]
+name = "Monad Testnet"
+rpc_url = "https://rpc.testnet.monad.xyz"
+chain_id = 10143
+private_key_env = "MONAD_TESTNET_PRIVATE_KEY"
+verify = true
+explorer_url = "https://testnet.monadexplorer.com"
+
+[networks.monad_mainnet]
+name = "Monad Mainnet"
+rpc_url = "https://rpc.monad.xyz"
+chain_id = 10143
+private_key_env = "MONAD_MAINNET_PRIVATE_KEY"
+verify = true
+explorer_url = "https://monadexplorer.com"
+
+# Contract configurations
+[contracts]
+
+[contracts.AgentDAO]
+name = "AgentDAO"
+sol_file = "contracts/AgentDAO.sol"
+constructor_args = []
+gas_limit = 5000000
+
+[contracts.AgentIdentity]
+name = "AgentIdentity"
+sol_file = "contracts/AgentIdentity.sol"
+constructor_args = []
+gas_limit = 3000000
+
+[contracts.BeeToken]
+name = "BeeToken"
+sol_file = "contracts/BeeToken.sol"
+constructor_args = ["BeeToken", "BEE", 18]
+gas_limit = 2000000
+
+# Deployment settings
+[deployment]
+confirmations = 2
+auto_verify = true
+save_abi = true
+abi_output_dir = "deployments/abis"
+address_output_dir = "deployments/addresses"

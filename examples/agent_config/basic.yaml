@@ -1,0 +1,51 @@
+# Basic agent configuration example
+
+name: basic-agent
+description: A simple general-purpose agent
+version: "1.0.0"
+
+# Agent runtime configuration
+runtime:
+  memory_limit: 128MB
+  cpu_limit: 100ms
+  timeout: 300s
+
+# Capability levels (L0-L10)
+capabilities:
+  - L0_LocalCompute
+  - L1_FileRead
+  - L2_FileWrite
+  - L3_NetworkOut
+
+# Skills to load
+skills:
+  - name: http-client
+    version: "1.0.0"
+    config:
+      timeout: 30s
+      max_retries: 3
+      
+  - name: json-processor
+    version: "1.0.0"
+    config: {}
+
+# Triggers
+triggers:
+  - type: schedule
+    cron: "0 */6 * * *"  # Every 6 hours
+    
+  - type: webhook
+    endpoint: /webhook/basic-agent
+    method: POST
+
+# Logging
+logging:
+  level: info
+  format: json
+  destination: stdout
+
+# Resource limits
+limits:
+  max_tasks_per_minute: 60
+  max_storage_mb: 100
+  max_network_requests_per_hour: 1000

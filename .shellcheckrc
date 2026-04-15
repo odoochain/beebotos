@@ -1,0 +1,11 @@
+# ShellCheck configuration
+
+# Enable all checks
+enable=all
+
+# Disable specific checks
+disable=SC1090  # Can't follow non-constant source
+disable=SC1091  # Not following: file not found
+
+# Shell dialect
+shell=bash

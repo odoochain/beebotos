@@ -1,0 +1,467 @@
+openapi: 3.0.3
+info:
+  title: BeeBotOS API
+  description: |
+    BeeBotOS - Web4.0 Autonomous Agent Operating System API
+    
+    ## Authentication
+    API uses JWT Bearer tokens for authentication. Include the token in the Authorization header:
+    ```
+    Authorization: Bearer <token>
+    ```
+  version: 2.0.0
+  contact:
+    name: BeeBotOS Team
+    email: api@beebotos.io
+    url: https://beebotos.io
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.beebotos.io/v1
+    description: Production
+  - url: https://api.testnet.beebotos.io/v1
+    description: Testnet
+  - url: http://localhost:8080/api/v1
+    description: Local
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      description: Check if the API is running
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /agents:
+    get:
+      summary: List agents
+      description: Get a list of all agents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [running, paused, stopped]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentList'
+    
+    post:
+      summary: Create agent
+      description: Spawn a new agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+      responses:
+        '201':
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /agents/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    
+    get:
+      summary: Get agent
+      description: Get detailed information about an agent
+      responses:
+        '200':
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDetail'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    
+    put:
+      summary: Update agent
+      description: Update agent configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAgentRequest'
+      responses:
+        '200':
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentDetail'
+    
+    delete:
+      summary: Delete agent
+      description: Terminate and remove an agent
+      responses:
+        '204':
+          description: Agent deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /agents/{id}/messages:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    
+    post:
+      summary: Send message
+      description: Send a message to an agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageRequest'
+      responses:
+        '200':
+          description: Message sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+
+  /skills:
+    get:
+      summary: List skills
+      description: Get available skills from marketplace
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+    
+    post:
+      summary: Deploy skill
+      description: Deploy a new skill to an agent
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DeploySkillRequest'
+      responses:
+        '201':
+          description: Skill deployed
+
+  /dao/proposals:
+    get:
+      summary: List proposals
+      description: Get DAO governance proposals
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, active, executed, cancelled]
+      responses:
+        '200':
+          description: List of proposals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Proposal'
+    
+    post:
+      summary: Create proposal
+      description: Submit a new governance proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProposalRequest'
+      responses:
+        '201':
+          description: Proposal created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Proposal'
+
+  /dao/proposals/{id}/vote:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    
+    post:
+      summary: Cast vote
+      description: Vote on a proposal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoteRequest'
+      responses:
+        '200':
+          description: Vote recorded
+
+  /ws:
+    get:
+      summary: WebSocket connection
+      description: Real-time WebSocket endpoint for events
+      responses:
+        '101':
+          description: WebSocket upgrade
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [starting, running, paused, stopping, stopped, error]
+        created_at:
+          type: string
+          format: date-time
+
+    AgentList:
+      type: object
+      properties:
+        total:
+          type: integer
+        agents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Agent'
+
+    AgentDetail:
+      allOf:
+        - $ref: '#/components/schemas/Agent'
+        - type: object
+          properties:
+            config:
+              type: object
+            capabilities:
+              type: array
+              items:
+                type: string
+            memory_usage:
+              type: integer
+            cpu_usage:
+              type: number
+
+    CreateAgentRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        config:
+          type: object
+        capabilities:
+          type: array
+          items:
+            type: string
+
+    UpdateAgentRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        config:
+          type: object
+        status:
+          type: string
+
+    MessageRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+        payload:
+          type: object
+
+    MessageResponse:
+      type: object
+      properties:
+        message_id:
+          type: string
+        status:
+          type: string
+        timestamp:
+          type: string
+
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+
+    DeploySkillRequest:
+      type: object
+      properties:
+        agent_id:
+          type: string
+        skill_file:
+          type: string
+          format: binary
+
+    Proposal:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        proposer:
+          type: string
+        status:
+          type: string
+        for_votes:
+          type: integer
+        against_votes:
+          type: integer
+        start_time:
+          type: string
+        end_time:
+          type: string
+
+    CreateProposalRequest:
+      type: object
+      required:
+        - title
+        - description
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        proposal_type:
+          type: string
+        target:
+          type: string
+        calldata:
+          type: string
+
+    VoteRequest:
+      type: object
+      required:
+        - choice
+      properties:
+        choice:
+          type: string
+          enum: [for, against, abstain]
+        reason:
+          type: string
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: integer
+            message:
+              type: string
+            type:
+              type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

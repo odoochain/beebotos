@@ -1,0 +1,57 @@
+# Build artifacts
+target/
+**/target/
+*.wasm
+
+# Dependencies
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+docs/book/
+docs/generated/
+
+# Test coverage
+tarpaulin-report.html
+coverage/
+
+# Logs
+*.log
+logs/
+
+# Secrets
+.env
+.env.local
+*.key
+*.pem
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# CI
+.github/
+.gitlab-ci.yml
+
+# Benchmarks
+benchmark_results/
+criterion/
+
+# Deployments
+deployments/
+*.deployment.json

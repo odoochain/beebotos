@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+package beebotos.a2a.negotiation;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/beebotos/beebotos/proto/a2a";
+
+// Negotiation message types
+message NegotiationMessage {
+  string negotiation_id = 1;
+  string correlation_id = 2;
+  string from_agent = 3;
+  string to_agent = 4;
+  NegotiationPhase phase = 5;
+  google.protobuf.Timestamp timestamp = 6;
+  
+  oneof content {
+    Offer offer = 10;
+    CounterOffer counter = 11;
+    Acceptance acceptance = 12;
+    Rejection rejection = 13;
+  }
+}
+
+enum NegotiationPhase {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_OFFER = 1;
+  PHASE_COUNTER = 2;
+  PHASE_ACCEPT = 3;
+  PHASE_REJECT = 4;
+}
+
+// Initial offer
+message Offer {
+  string offer_id = 1;
+  DealTerms terms = 2;
+  int32 validity_hours = 3;  // Offer validity period
+}
+
+// Counter offer
+message CounterOffer {
+  string offer_id = 1;
+  string counter_to = 2;  // Original offer ID
+  DealTerms terms = 3;
+  string reason = 4;  // Explanation for changes
+}
+
+// Acceptance
+message Acceptance {
+  string offer_id = 1;
+  string accepted_by = 2;
+  bytes signature = 3;
+  string escrow_address = 4;  // Escrow contract address
+}
+
+// Rejection
+message Rejection {
+  string offer_id = 1;
+  string reason = 2;
+  bool counter_invited = 3;  // Whether counter offers are welcome
+}
+
+// Deal terms
+message DealTerms {
+  TaskSpecification task = 1;
+  PaymentTerms payment = 2;
+  DeliveryTerms delivery = 3;
+  repeated Term additional_terms = 4;
+}
+
+message TaskSpecification {
+  string task_type = 1;
+  bytes task_hash = 2;  // Hash of detailed task description
+  string requirements_hash = 3;  // IPFS hash or URI to full requirements
+}
+
+message PaymentTerms {
+  string currency = 1;
+  string amount = 2;  // Use string for large numbers
+  PaymentModel model = 3;
+  EscrowTerms escrow = 4;
+}
+
+enum PaymentModel {
+  PAYMENT_UNSPECIFIED = 0;
+  PAYMENT_FIXED = 1;
+  PAYMENT_MILESTONE = 2;
+  PAYMENT_HOURLY = 3;
+  PAYMENT_SUBSCRIPTION = 4;
+}
+
+message EscrowTerms {
+  string escrow_contract = 1;
+  int32 dispute_window_hours = 2;
+  repeated Arbiter arbiters = 3;
+}
+
+message Arbiter {
+  string agent_id = 1;
+  bytes public_key = 2;
+  int32 reputation_score = 3;
+}
+
+message DeliveryTerms {
+  int32 deadline_hours = 1;
+  repeated Milestone milestones = 2;
+  AcceptanceCriteria acceptance = 3;
+}
+
+message Milestone {
+  int32 sequence = 1;
+  string description = 2;
+  string deliverable_hash = 3;
+  string payment_percentage = 4;  // Percentage of total payment
+  int32 deadline_hours = 5;
+}
+
+message AcceptanceCriteria {
+  string criteria_type = 1;
+  bytes criteria_hash = 2;
+  int32 review_period_hours = 3;
+}
+
+message Term {
+  string key = 1;
+  string value = 2;
+}
+
+// Negotiation session state
+message NegotiationSession {
+  string session_id = 1;
+  string initiator = 2;
+  string responder = 3;
+  NegotiationState state = 4;
+  repeated NegotiationMessage history = 5;
+  DealTerms current_terms = 6;
+  int32 round_number = 7;
+  google.protobuf.Timestamp started_at = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+enum NegotiationState {
+  STATE_UNSPECIFIED = 0;
+  STATE_PENDING = 1;
+  STATE_ACTIVE = 2;
+  STATE_AGREED = 3;
+  STATE_REJECTED = 4;
+  STATE_EXPIRED = 5;
+  STATE_DISPUTED = 6;
+}

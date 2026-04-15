@@ -1,0 +1,107 @@
+[package]
+name = "beebotos-chain"
+version = "1.0.0"
+edition = "2021"
+authors = ["BeeBotOS Team"]
+description = "BeeBotOS Chain - Blockchain and DAO integration"
+license = "MIT"
+repository = "https://github.com/beebotos/beebotos"
+
+[dependencies]
+beebotos-core = { path = "../core" }
+beebotos-message-bus = { path = "../message-bus", features = ["memory"] }
+
+# Alloy - Ethereum Rust toolkit
+alloy = { version = "0.8", features = ["full"] }
+alloy-primitives = { version = "0.8", features = ["serde"] }
+alloy-sol-types = "0.8"
+alloy-provider = { version = "0.8", features = ["reqwest"] }
+alloy-rpc-types = "0.8"
+alloy-rpc-client = "0.8"
+alloy-transport = "0.8"
+alloy-transport-http = "0.8"
+alloy-signer = "0.8"
+alloy-signer-local = "0.8"
+alloy-contract = "0.8"
+alloy-consensus = { version = "0.8", default-features = false, features = ["std", "serde"] }
+alloy-eips = "0.8"
+alloy-network = "0.8"
+alloy-genesis = "0.8"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hashing
+sha3 = "0.10"
+
+# HTTP client
+reqwest = "0.12"
+
+tokio = { version = "1.36", features = ["full", "fs"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+async-trait = "0.1"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2.5"
+hex = "0.4"
+rand = "0.8"
+
+# BIP39/BIP32 for HD wallet
+coins-bip39 = "0.8"
+coins-bip32 = "0.8"
+zeroize = { version = "1.7", features = ["zeroize_derive"] }
+
+# Encryption for secure storage
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+sha2 = "0.10"
+base64 = "0.22"
+
+# Retry logic
+backoff = { version = "0.4", features = ["tokio"] }
+anyhow = "1.0"
+
+# Async utilities
+futures = "0.3"
+
+# Configuration validation
+validator = { version = "0.18", features = ["derive"] }
+
+# LRU cache
+lru = "0.12"
+parking_lot = "0.12"
+
+# File watching for config reload
+notify = "6.1"
+
+# Secret types for sensitive data
+secrecy = { version = "0.10", features = ["serde"] }
+
+# Metrics and monitoring
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", optional = true, default-features = false, features = ["http-listener", "push-gateway"] }
+
+# OpenTelemetry
+opentelemetry = "0.24"
+opentelemetry_sdk = { version = "0.24", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.17", features = ["tonic", "metrics"] }
+tracing-opentelemetry = "0.25"
+
+[features]
+default = ["prometheus"]
+prometheus = ["metrics-exporter-prometheus"]
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["html_reports"] }
+beebotos-agents = { path = "../agents" }
+
+[[bench]]
+name = "chain_benchmarks"
+harness = false

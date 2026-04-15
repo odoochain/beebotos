@@ -1,0 +1,46 @@
+[profile.default]
+src = "contracts/src"
+out = "out"
+libs = ["lib"]
+test = "contracts/test"
+cache_path = "cache"
+
+[profile.default.optimizer]
+enabled = true
+runs = 20000
+
+[profile.ci.optimizer]
+enabled = true
+runs = 20000
+
+[profile.ci.gas_reports]
+enabled = true
+contracts = ["*"]
+
+[gascheck]
+enabled = true
+output = "gas_snapshot.json"
+
+[profile.default.gas_reports]
+enabled = true
+contracts = ["AgentDAO", "BeeToken", "TreasuryManager", "AgentIdentity", "SkillNFT"]
+
+[profile.ci]
+verbosity = 4
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = false
+
+[rpc_endpoints]
+monad_testnet = "https://testnet-rpc.monad.xyz"
+monad_mainnet = "https://rpc.monad.xyz"
+
+[etherscan]
+monad_testnet = { key = "${ETHERSCAN_API_KEY}", url = "https://testnet-explorer.monad.xyz/api" }
+
+[invariant]
+runs = 256
+depth = 32
+fail_on_revert = false

@@ -1,0 +1,126 @@
+version: "3.8"
+
+services:
+  # Gateway API Service
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.gateway
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      - RUST_LOG=info
+      - GATEWAY_ADDR=0.0.0.0:8080
+      - METRICS_ADDR=0.0.0.0:9090
+      - DATABASE_URL=postgres://beebotos:beebotos@postgres:5432/beebotos
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - gateway-data:data
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # Social Brain Service
+  brain:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.brain
+    ports:
+      - "8081:8081"
+    environment:
+      - RUST_LOG=info
+      - BRAIN_ADDR=0.0.0.0:8081
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - qdrant
+    volumes:
+      - brain-data:data/brain
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # Chain Service
+  chain:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.chain
+    ports:
+      - "8082:8082"
+    environment:
+      - RUST_LOG=info
+      - CHAIN_ADDR=0.0.0.0:8082
+      - RPC_URL=${RPC_URL:-https://rpc.monad.xyz}
+    volumes:
+      - chain-data:data/chain
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # DAO Service
+  dao:
+    build:
+      context: ../..
+      dockerfile: deployments/docker/Dockerfile.dao
+    ports:
+      - "8083:8083"
+    environment:
+      - RUST_LOG=info
+      - DAO_ADDR=0.0.0.0:8083
+      - DATABASE_URL=postgres://beebotos:beebotos@postgres:5432/beebotos
+    depends_on:
+      - postgres
+    volumes:
+      - dao-data:data/dao
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=beebotos
+      - POSTGRES_PASSWORD=beebotos
+      - POSTGRES_DB=beebotos
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - beebotos-network
+    restart: unless-stopped
+
+volumes:
+  gateway-data:
+  brain-data:
+  chain-data:
+  dao-data:
+  postgres-data:
+  redis-data:
+  qdrant-data:
+
+networks:
+  beebotos-network:
+    driver: bridge
