@@ -117,7 +117,7 @@ pub fn RegisterPage() -> impl IntoView {
                     }
                     Err(e) => {
                         set_error.set(Some(format!(
-                            "{}: {:?}",
+                            "{}: {}",
                             i18n.t("register-error-failed"),
                             e
                         )));
