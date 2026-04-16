@@ -11,6 +11,9 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 
+const DEFAULT_ROLES: &str = "member";
+const DEFAULT_PERMISSIONS: &str = "agentRead,agentCreate,daoVote,settingsRead";
+
 /// Authenticated user info (non-sensitive)
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AuthUserInfo {
@@ -23,7 +26,7 @@ pub struct AuthUserInfo {
     pub permissions: Vec<String>,
 }
 
-/// DB row for users table
+/// DB row for users table (includes password hash)
 #[derive(Clone, Debug, sqlx::FromRow)]
 struct UserRow {
     id: String,
@@ -36,6 +39,32 @@ struct UserRow {
     permissions: String,
 }
 
+/// DB row for public user queries (excludes password hash)
+#[derive(Clone, Debug, sqlx::FromRow)]
+struct UserPublicRow {
+    id: String,
+    username: String,
+    email: Option<String>,
+    avatar: Option<String>,
+    wallet_address: Option<String>,
+    roles: String,
+    permissions: String,
+}
+
+impl UserPublicRow {
+    fn to_auth_user_info(&self) -> AuthUserInfo {
+        AuthUserInfo {
+            id: self.id.clone(),
+            username: self.username.clone(),
+            email: self.email.clone(),
+            avatar: self.avatar.clone(),
+            wallet_address: self.wallet_address.clone(),
+            roles: parse_comma_list(&self.roles),
+            permissions: parse_comma_list(&self.permissions),
+        }
+    }
+}
+
 impl UserRow {
     fn to_auth_user_info(&self) -> AuthUserInfo {
         AuthUserInfo {
@@ -44,10 +73,17 @@ impl UserRow {
             email: self.email.clone(),
             avatar: self.avatar.clone(),
             wallet_address: self.wallet_address.clone(),
-            roles: self.roles.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-            permissions: self.permissions.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            roles: parse_comma_list(&self.roles),
+            permissions: parse_comma_list(&self.permissions),
         }
     }
+}
+
+fn parse_comma_list(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Authentication service
@@ -72,25 +108,30 @@ impl AuthService {
 
         let result = sqlx::query_as::<_, UserRow>(
             "INSERT INTO users (username, email, password_hash, roles, permissions)
-             VALUES (?, ?, ?, 'member', 'agentRead,agentCreate,daoVote,settingsRead')
+             VALUES (?, ?, ?, ?, ?)
              RETURNING id, username, email, password_hash, avatar, wallet_address, roles, permissions"
         )
         .bind(username)
         .bind(email)
         .bind(password_hash)
+        .bind(DEFAULT_ROLES)
+        .bind(DEFAULT_PERMISSIONS)
         .fetch_one(&self.db)
         .await;
 
         match result {
             Ok(row) => Ok(row.to_auth_user_info()),
-            Err(sqlx::Error::Database(db_err)) if db_err.message().contains("UNIQUE") => {
+            Err(sqlx::Error::Database(db_err)) => {
+                let field = db_err.constraint()
+                    .and_then(|c| if c.contains("email") { Some("email") } else { Some("username") })
+                    .unwrap_or("username");
                 Err(AppError::Validation(vec![crate::error::ValidationError {
-                    field: "username".to_string(),
-                    message: "Username already exists".to_string(),
+                    field: field.to_string(),
+                    message: format!("{} already exists", field),
                     code: "ALREADY_EXISTS".to_string(),
                 }]))
             }
-            Err(e) => Err(AppError::Internal(format!("Failed to create user: {}", e))),
+            Err(e) => Err(AppError::database(e)),
         }
     }
 
@@ -106,8 +147,7 @@ impl AuthService {
         )
         .bind(username)
         .fetch_optional(&self.db)
-        .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .await?;
 
         let row = row.ok_or_else(|| AppError::Unauthorized("Invalid credentials".to_string()))?;
 
@@ -119,14 +159,13 @@ impl AuthService {
 
     /// Get user by ID
     pub async fn get_user_by_id(&self, id: &str) -> Result<AuthUserInfo, AppError> {
-        let row = sqlx::query_as::<_, UserRow>(
-            "SELECT id, username, email, password_hash, avatar, wallet_address, roles, permissions
+        let row = sqlx::query_as::<_, UserPublicRow>(
+            "SELECT id, username, email, avatar, wallet_address, roles, permissions
              FROM users WHERE id = ?"
         )
         .bind(id)
         .fetch_optional(&self.db)
-        .await
-        .map_err(|e| AppError::Internal(format!("Database error: {}", e)))?;
+        .await?;
 
         row.map(|r| r.to_auth_user_info())
             .ok_or_else(|| AppError::not_found("User", id))

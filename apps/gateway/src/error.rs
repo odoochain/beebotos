@@ -214,7 +214,6 @@ pub fn convert_agent_error(err: beebotos_agents::error::AgentError) -> GatewayEr
         AgentError::NotFound(msg) => GatewayError::not_found("resource", msg),
         AgentError::Wallet(msg) => GatewayError::internal(format!("Wallet error: {}", msg)),
         AgentError::TimeoutMsg(_msg) => GatewayError::timeout("Agent operation", 30),
-        AgentError::Planning(msg) => GatewayError::internal(format!("Planning error: {}", msg)),
     }
 }
 
