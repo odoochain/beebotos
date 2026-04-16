@@ -18,6 +18,7 @@ const DEFAULT_PERMISSIONS: &str = "agentRead,agentCreate,daoVote,settingsRead";
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AuthUserInfo {
     pub id: String,
+    #[serde(rename = "name")]
     pub username: String,
     pub email: Option<String>,
     pub avatar: Option<String>,
