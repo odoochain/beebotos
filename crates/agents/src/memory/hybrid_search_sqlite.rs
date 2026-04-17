@@ -512,8 +512,8 @@ impl HybridSearchSqlite {
         let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
             let rank: f64 = row.get(6)?;
             // BM25 rank is negative (lower is better in SQLite FTS5), normalize to 0-1
-            // Higher score = better match. The old formula was inverted.
-            let score = 1.0 - (rank.abs() as f32 + 1.0).recip();
+            // Higher score = better match. Use 1/(1+|rank|) so rank=0 gives score=1.0.
+            let score = 1.0 / (rank.abs() as f32 + 1.0);
             Ok((Self::row_to_entry(row)?, score))
         }).map_err(|e| {
             crate::error::AgentError::storage(format!(

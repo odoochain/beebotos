@@ -6,6 +6,7 @@
 //! Refactored to use common webhook utilities from the common module.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ use crate::communication::channel::telegram_channel::{
 use crate::communication::webhook::{
     SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 // Import common webhook utilities
@@ -72,6 +73,7 @@ pub struct TelegramWebhookHandler {
     telegram_config: TelegramWebhookConfig,
     // Use common token verifier
     token_verifier: Option<TokenVerifier>,
+    dispatcher: Option<Arc<AgentMessageDispatcher>>,
 }
 
 impl TelegramWebhookHandler {
@@ -95,7 +97,14 @@ impl TelegramWebhookHandler {
             config,
             telegram_config,
             token_verifier,
+            dispatcher: None,
         }
+    }
+
+    /// Attach an agent message dispatcher.
+    pub fn with_dispatcher(mut self, dispatcher: Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -402,24 +411,33 @@ impl WebhookHandler for TelegramWebhookHandler {
 
     async fn handle_event(&self, event: WebhookEvent) -> Result<()> {
         match event.event_type {
-            WebhookEventType::MessageReceived => {
+            WebhookEventType::MessageReceived | WebhookEventType::MessageEdited | WebhookEventType::BotMentioned => {
                 if let Some(msg) = &event.message {
                     info!(
                         "Received message from Telegram: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     // For Telegram, use bot token prefix as platform_user_id to support multi-bot.
+                    //     let platform_user_id = self.telegram_config.bot_token.split(':').next()
+                    //         .unwrap_or("telegram_default")
+                    //         .to_string();
+                    //     let target_channel_id = msg.metadata.get("chat_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::Telegram,
+                    //         &platform_user_id,
+                    //         msg.clone(),
+                    //         target_channel_id,
+                    //     ).await?;
+                    // }
                 }
-            }
-            WebhookEventType::MessageEdited => {
-                if let Some(msg) = &event.message {
-                    info!("Edited message from Telegram: {}", msg.content);
-                }
-            }
-            WebhookEventType::BotMentioned => {
-                info!(
-                    "Callback query from Telegram: {:?}",
-                    event.metadata.get("callback_data")
-                );
             }
             _ => debug!("Received unhandled event type: {:?}", event.event_type),
         }

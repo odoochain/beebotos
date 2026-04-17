@@ -46,7 +46,7 @@ pub struct FailoverConfig {
 impl Default for FailoverConfig {
     fn default() -> Self {
         Self {
-            attempt_timeout_secs: 60,
+            attempt_timeout_secs: 30,
             max_failures: 3,
             health_check_interval_secs: 60,
             enable_circuit_breaker: true,

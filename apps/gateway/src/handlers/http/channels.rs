@@ -13,7 +13,7 @@ use crate::error::GatewayError;
 use crate::AppState;
 use gateway::middleware::AuthUser;
 
-use beebotos_agents::communication::channel::{Channel, ChannelEvent, PersonalWeChatChannel};
+use beebotos_agents::communication::channel::{ChannelEvent, PersonalWeChatChannel};
 use beebotos_agents::communication::{Message, MessageType, PlatformType};
 use uuid::Uuid;
 
@@ -52,13 +52,24 @@ pub async fn get_wechat_qr(
         .ok_or_else(|| GatewayError::internal("Channel registry not initialized"))?
         .clone();
 
-    let channel = registry.get_channel_by_platform(PlatformType::WeChat).await
-        .ok_or_else(|| GatewayError::internal("Personal WeChat channel not initialized"))?;
+    // Try to get the personal_wechat channel specifically.
+    // In the legacy registry, both "wechat" (enterprise) and "personal_wechat"
+    // share PlatformType::WeChat, so we look up by exact channel type first.
+    let channel = if let Some(ch) = registry.get_channel("personal_wechat").await {
+        ch
+    } else {
+        warn!("personal_wechat not found in legacy_map, falling back to PlatformType::WeChat");
+        registry.get_channel_by_platform(PlatformType::WeChat).await
+            .ok_or_else(|| GatewayError::internal("Personal WeChat channel not initialized"))?
+    };
 
     let qr_resp = {
         let guard = channel.read().await;
         let pwc = guard.as_any().downcast_ref::<PersonalWeChatChannel>()
-            .ok_or_else(|| GatewayError::internal("Channel is not PersonalWeChatChannel"))?;
+            .ok_or_else(|| GatewayError::internal(
+                "Channel is not PersonalWeChatChannel. \
+                 Ensure 'personal_wechat' is enabled in config and not overwritten by 'wechat' (enterprise)."
+            ))?;
         pwc.get_qr_code().await
     }.map_err(|e| GatewayError::internal(format!("Failed to get QR code: {}", e)))?;
 
@@ -165,60 +176,104 @@ pub async fn list_channels(
 ) -> Result<Json<Vec<ChannelInfo>>, GatewayError> {
     info!("Listing channels");
 
-    // Return hardcoded channel list for now
-    // In the future, this should query the channel registry
-    let channels = vec![
-        ChannelInfo {
-            id: "wechat".to_string(),
-            name: "微信".to_string(),
-            description: "WeChat".to_string(),
-            icon: "💬".to_string(),
-            enabled: true,
-            status: "connected".to_string(),
-            config: None,
-            last_error: None,
-            created_at: None,
-            updated_at: None,
-        },
-        ChannelInfo {
-            id: "webchat".to_string(),
-            name: "WebChat".to_string(),
-            description: "Web Admin Chat".to_string(),
-            icon: "🌐".to_string(),
-            enabled: true,
-            status: "connected".to_string(),
-            config: None,
-            last_error: None,
-            created_at: None,
-            updated_at: None,
-        },
-        ChannelInfo {
-            id: "dingtalk".to_string(),
-            name: "钉钉".to_string(),
-            description: "DingTalk".to_string(),
-            icon: "💼".to_string(),
-            enabled: false,
-            status: "disabled".to_string(),
-            config: None,
-            last_error: None,
-            created_at: None,
-            updated_at: None,
-        },
-        ChannelInfo {
-            id: "feishu".to_string(),
-            name: "飞书".to_string(),
-            description: "Lark".to_string(),
-            icon: "🚀".to_string(),
-            enabled: false,
-            status: "disabled".to_string(),
-            config: None,
-            last_error: None,
-            created_at: None,
-            updated_at: None,
-        },
-    ];
+    let mut channels = Vec::new();
+
+    // 🟢 P1 FIX: Query ChannelRegistry for actual registered channels
+    if let Some(ref registry) = state.channel_registry {
+        let registered = registry.list_channels().await;
+        for info in registered {
+            let platform_str = info.platform.to_string();
+            channels.push(ChannelInfo {
+                id: info.channel_type.clone(),
+                name: platform_str.clone(),
+                description: format!("{} channel", platform_str),
+                icon: platform_icon(&platform_str).to_string(),
+                enabled: info.enabled,
+                status: if info.is_connected {
+                    "connected".to_string()
+                } else {
+                    "disconnected".to_string()
+                },
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            });
+        }
+    }
+
+    // Fallback: if no channels found via registry, return default list
+    if channels.is_empty() {
+        channels = vec![
+            ChannelInfo {
+                id: "wechat".to_string(),
+                name: "微信".to_string(),
+                description: "WeChat".to_string(),
+                icon: "💬".to_string(),
+                enabled: true,
+                status: "connected".to_string(),
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            },
+            ChannelInfo {
+                id: "webchat".to_string(),
+                name: "WebChat".to_string(),
+                description: "Web Admin Chat".to_string(),
+                icon: "🌐".to_string(),
+                enabled: true,
+                status: "connected".to_string(),
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            },
+            ChannelInfo {
+                id: "dingtalk".to_string(),
+                name: "钉钉".to_string(),
+                description: "DingTalk".to_string(),
+                icon: "💼".to_string(),
+                enabled: false,
+                status: "disabled".to_string(),
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            },
+            ChannelInfo {
+                id: "feishu".to_string(),
+                name: "飞书".to_string(),
+                description: "Lark".to_string(),
+                icon: "🚀".to_string(),
+                enabled: false,
+                status: "disabled".to_string(),
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            },
+        ];
+    }
 
     Ok(Json(channels))
+}
+
+/// Return an emoji icon for a platform name.
+fn platform_icon(platform: &str) -> &'static str {
+    match platform.to_lowercase().as_str() {
+        "wechat" => "💬",
+        "webchat" => "🌐",
+        "dingtalk" => "💼",
+        "lark" | "feishu" => "🚀",
+        "slack" => "💻",
+        "telegram" => "✈️",
+        "discord" => "🎮",
+        "whatsapp" => "📱",
+        "teams" => "🏢",
+        "twitter" => "🐦",
+        _ => "📡",
+    }
 }
 
 /// Channel information
@@ -291,12 +346,39 @@ pub async fn send_webchat_message(
 
 /// Get channel by ID
 pub async fn get_channel(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<ChannelInfo>, GatewayError> {
     info!("Getting channel: {}", id);
 
-    // For now, return hardcoded channel info
+    // 🟢 P1 FIX: Query ChannelRegistry for actual channel
+    if let Some(ref registry) = state.channel_registry {
+        if let Some(channel) = registry.get_channel(&id).await {
+            let guard = channel.read().await;
+            let platform = guard.platform();
+            let platform_str = platform.to_string();
+            let is_connected = guard.is_connected();
+
+            return Ok(Json(ChannelInfo {
+                id: id.clone(),
+                name: platform_str.clone(),
+                description: format!("{} channel", platform_str),
+                icon: platform_icon(&platform_str).to_string(),
+                enabled: true,
+                status: if is_connected {
+                    "connected".to_string()
+                } else {
+                    "disconnected".to_string()
+                },
+                config: None,
+                last_error: None,
+                created_at: None,
+                updated_at: None,
+            }));
+        }
+    }
+
+    // Fallback to hardcoded list for well-known channels
     let channel = match id.as_str() {
         "wechat" => ChannelInfo {
             id: "wechat".to_string(),

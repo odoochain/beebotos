@@ -825,9 +825,8 @@ impl Channel for PersonalWeChatChannel {
     }
 
     fn is_connected(&self) -> bool {
-        // Simplified: avoid block_on which can cause deadlock
-        // Return false - the async methods will properly check state
-        false
+        // Read the connected state without blocking the async runtime
+        self.connected.try_read().map(|g| *g).unwrap_or(false)
     }
 
     async fn connect(&mut self) -> Result<()> {

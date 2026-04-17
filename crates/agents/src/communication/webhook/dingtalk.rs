@@ -13,7 +13,7 @@ use super::common::{compute_hmac_sha256, MetadataBuilder};
 use crate::communication::webhook::{
     SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 /// DingTalk webhook payload
@@ -161,6 +161,7 @@ pub struct DingTalkWebhookHandler {
     app_secret: String,
     app_key: String,
     encrypt_key: Option<String>,
+    dispatcher: Option<std::sync::Arc<AgentMessageDispatcher>>,
 }
 
 impl DingTalkWebhookHandler {
@@ -182,7 +183,13 @@ impl DingTalkWebhookHandler {
             app_key,
             app_secret,
             encrypt_key,
+            dispatcher: None,
         }
+    }
+
+    pub fn with_dispatcher(mut self, dispatcher: std::sync::Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -512,6 +519,26 @@ impl WebhookHandler for DingTalkWebhookHandler {
                         "Received message from DingTalk: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     let platform_user_id = event.metadata.get("corp_id")
+                    //         .or_else(|| event.metadata.get("chatbot_corp_id"))
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //     let target_channel_id = msg.metadata.get("sender_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::DingTalk,
+                    //         &platform_user_id,
+                    //         msg.clone(),
+                    //         target_channel_id,
+                    //     ).await?;
+                    // }
                 }
             }
             WebhookEventType::UserJoined => {

@@ -177,34 +177,7 @@ impl MessageProcessor {
             })?;
 
         // 5.5 Memory 检索
-        let mut memory_context = String::new();
-        if let Some(ref memory) = self.memory_system {
-            match memory.search(&content, 5).await {
-                Ok(results) if !results.is_empty() => {
-                    info!("Memory search returned {} results for query '{}'", results.len(), content.chars().take(40).collect::<String>());
-                    let content_lower = content.to_lowercase();
-                    let filtered: Vec<_> = results.iter()
-                        .filter(|r| !r.entry.content.to_lowercase().contains(&content_lower))
-                        .take(5)
-                        .collect();
-                    if !filtered.is_empty() {
-                        memory_context.push_str("\n\n[系统提示：以下是该用户的历史记忆，回答时必须结合这些信息]\n");
-                        for r in filtered {
-                            memory_context.push_str(&format!("- {}\n", r.entry.content));
-                        }
-                        info!("Injecting memory context ({} chars) into LLM prompt", memory_context.len());
-                    } else {
-                        info!("All memory results were self-referential, skipping injection");
-                    }
-                }
-                Ok(_) => {
-                    info!("Memory search returned no results for query '{}'", content.chars().take(40).collect::<String>());
-                }
-                Err(e) => {
-                    warn!("Memory search failed: {}", e);
-                }
-            }
-        }
+        let memory_context = self.build_memory_context(&content).await;
 
         // 6. 调用 LLM（注入记忆上下文）
         let llm_response = self.call_llm_with_context(&message, &history, &images, &memory_context).await?;
@@ -398,34 +371,7 @@ impl MessageProcessor {
             })?;
 
         // 6.5 Memory 检索
-        let mut memory_context = String::new();
-        if let Some(ref memory) = self.memory_system {
-            match memory.search(&content, 5).await {
-                Ok(results) if !results.is_empty() => {
-                    info!("Memory search returned {} results for query '{}'", results.len(), content.chars().take(40).collect::<String>());
-                    let content_lower = content.to_lowercase();
-                    let filtered: Vec<_> = results.iter()
-                        .filter(|r| !r.entry.content.to_lowercase().contains(&content_lower))
-                        .take(5)
-                        .collect();
-                    if !filtered.is_empty() {
-                        memory_context.push_str("\n\n[系统提示：以下是该用户的历史记忆，回答时必须结合这些信息]\n");
-                        for r in filtered {
-                            memory_context.push_str(&format!("- {}\n", r.entry.content));
-                        }
-                        info!("Injecting memory context ({} chars) into agent LLM prompt", memory_context.len());
-                    } else {
-                        info!("All memory results were self-referential, skipping injection");
-                    }
-                }
-                Ok(_) => {
-                    info!("Memory search returned no results for query '{}'", content.chars().take(40).collect::<String>());
-                }
-                Err(e) => {
-                    warn!("Memory search failed: {}", e);
-                }
-            }
-        }
+        let memory_context = self.build_memory_context(&content).await;
 
         // 7. 构造 TaskConfig 并调用 AgentRuntime
         let task_input = serde_json::json!({
@@ -649,6 +595,39 @@ impl MessageProcessor {
         })
     }
 
+    /// P2 FIX: 提取共享的 Memory 搜索逻辑，消除双重搜索
+    async fn build_memory_context(&self, content: &str) -> String {
+        let mut memory_context = String::new();
+        if let Some(ref memory) = self.memory_system {
+            match memory.search(content, 5).await {
+                Ok(results) if !results.is_empty() => {
+                    info!("Memory search returned {} results for query '{}'", results.len(), content.chars().take(40).collect::<String>());
+                    let content_lower = content.to_lowercase();
+                    let filtered: Vec<_> = results.iter()
+                        .filter(|r| !r.entry.content.to_lowercase().contains(&content_lower))
+                        .take(5)
+                        .collect();
+                    if !filtered.is_empty() {
+                        memory_context.push_str("\n\n[系统提示：以下是该用户的历史记忆，回答时必须结合这些信息]\n");
+                        for r in filtered {
+                            memory_context.push_str(&format!("- {}\n", r.entry.content));
+                        }
+                        info!("Injecting memory context ({} chars) into LLM prompt", memory_context.len());
+                    } else {
+                        info!("All memory results were self-referential, skipping injection");
+                    }
+                }
+                Ok(_) => {
+                    info!("Memory search returned no results for query '{}'", content.chars().take(40).collect::<String>());
+                }
+                Err(e) => {
+                    warn!("Memory search failed: {}", e);
+                }
+            }
+        }
+        memory_context
+    }
+
     /// 调用 LLM 并传入上下文
     async fn call_llm_with_context(
         &self,
@@ -680,8 +659,10 @@ impl MessageProcessor {
 
         info!("🤖 调用 LLM，上下文长度: {} 字符", context.len());
 
-        // 调用 LLM 服务
-        self.llm_service.process_message(message).await
+        // P1 FIX: 实际使用构建的 context，而非忽略它
+        let mut contextual_message = message.clone();
+        contextual_message.content = context;
+        self.llm_service.process_message(&contextual_message).await
     }
 
     /// 发送回复

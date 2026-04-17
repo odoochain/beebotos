@@ -3,6 +3,7 @@
 //! Unified Channel trait implementation for DingTalk (钉钉).
 //! Supports WebSocket mode (default), Webhook mode, and Polling mode.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -14,6 +15,7 @@ use tokio::time::{interval, Duration};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 use super::r#trait::{BaseChannelConfig, ConnectionMode, ContentType};
 use super::{Channel, ChannelConfig, ChannelEvent, ChannelInfo, MemberInfo};
@@ -167,6 +169,8 @@ pub struct DingTalkChannel {
     ws_state: Arc<RwLock<DingTalkWsState>>,
     ws_sender: Arc<RwLock<Option<mpsc::UnboundedSender<WsMessage>>>>,
     listener_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    /// Event bus for emitting channel events (P1 FIX)
+    event_bus: Arc<RwLock<Option<mpsc::Sender<ChannelEvent>>>>,
 }
 
 impl DingTalkChannel {
@@ -180,6 +184,7 @@ impl DingTalkChannel {
             ws_state: Arc::new(RwLock::new(DingTalkWsState::Disconnected)),
             ws_sender: Arc::new(RwLock::new(None)),
             listener_handle: Arc::new(RwLock::new(None)),
+            event_bus: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -337,6 +342,7 @@ impl DingTalkChannel {
         let ws_state = self.ws_state.clone();
         let auto_reconnect = self.config.base.auto_reconnect;
         let _max_reconnect_attempts = self.config.base.max_reconnect_attempts;
+        let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
             let mut heartbeat_interval = interval(Duration::from_secs(30));
@@ -347,7 +353,7 @@ impl DingTalkChannel {
                         match msg {
                             Ok(WsMessage::Text(text)) => {
                                 debug!("Received WebSocket message: {}", text);
-                                if let Err(e) = Self::handle_websocket_message(&text).await {
+                                if let Err(e) = Self::handle_websocket_message(&text, event_bus.clone()).await {
                                     warn!("Failed to handle WebSocket message: {}", e);
                                 }
                             }
@@ -400,8 +406,59 @@ impl DingTalkChannel {
         Ok(())
     }
 
+    /// P2 OPTIMIZE: Robustly extract text content from a DingTalk event payload.
+    /// Handles multiple message types and nested structures.
+    fn extract_event_content(data: &serde_json::Value) -> String {
+        // Try direct content field first
+        if let Some(s) = data.get("content").and_then(|v| v.as_str()) {
+            if !s.is_empty() { return s.to_string(); }
+        }
+        // Try text.msg_type content
+        if let Some(text_obj) = data.get("text") {
+            if let Some(s) = text_obj.get("content").and_then(|v| v.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+        // Try markdown content
+        if let Some(md) = data.get("markdown") {
+            if let Some(s) = md.get("text").and_then(|v| v.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+        // Try action card
+        if let Some(card) = data.get("action_card") {
+            if let Some(s) = card.get("markdown").and_then(|v| v.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+        // Try rich text (oa message)
+        if let Some(body) = data.get("body") {
+            if let Some(s) = body.get("content").and_then(|v| v.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+        // Try title as last resort
+        if let Some(s) = data.get("title").and_then(|v| v.as_str()) {
+            if !s.is_empty() { return s.to_string(); }
+        }
+        String::new()
+    }
+
+    /// P2 OPTIMIZE: Extract a string field from a JSON object using a prioritized list of keys.
+    fn extract_event_field(data: &serde_json::Value, keys: &[&str]) -> String {
+        for key in keys {
+            if let Some(s) = data.get(*key).and_then(|v| v.as_str()) {
+                if !s.is_empty() { return s.to_string(); }
+            }
+        }
+        String::new()
+    }
+
     /// Handle WebSocket message
-    async fn handle_websocket_message(text: &str) -> Result<()> {
+    async fn handle_websocket_message(
+        text: &str,
+        event_bus: Arc<RwLock<Option<mpsc::Sender<ChannelEvent>>>>,
+    ) -> Result<()> {
         match serde_json::from_str::<DingTalkWsMessage>(text) {
             Ok(msg) => {
                 match msg {
@@ -410,7 +467,58 @@ impl DingTalkChannel {
                     }
                     DingTalkWsMessage::Event { data } => {
                         debug!("Received event: {:?}", data);
-                        // Process event
+                        // P1/P2 FIX: Emit ChannelEvent through event_bus with robust field extraction
+                        if let Some(bus) = event_bus.read().await.as_ref() {
+                            // Robust content extraction: handles text, markdown, rich text, etc.
+                            let content = Self::extract_event_content(&data);
+                            // Robust sender ID extraction with multiple fallback keys
+                            let sender_id = Self::extract_event_field(&data, &[
+                                "senderStaffId", "senderUserId", "senderStaffId",
+                                "staffId", "userId", "senderNick", "senderName",
+                            ]);
+                            // Robust chat/channel ID extraction with multiple fallback keys
+                            let chat_id = Self::extract_event_field(&data, &[
+                                "conversationId", "chatId", "openConversationId",
+                                "groupId", "chatbotCorpId", "corpId",
+                            ]);
+
+                            if content.is_empty() {
+                                debug!("DingTalk event has no extractable content, skipping");
+                            } else {
+                                let mut message = Message::new(
+                                    Uuid::new_v4(),
+                                    PlatformType::DingTalk,
+                                    content,
+                                );
+                                message.metadata.insert(
+                                    "sender_id".to_string(),
+                                    sender_id.clone(),
+                                );
+                                message.metadata.insert(
+                                    "channel_id".to_string(),
+                                    chat_id.clone(),
+                                );
+                                // Preserve raw event type if available
+                                if let Some(event_type) = data.get("msgtype")
+                                    .or_else(|| data.get("msgType"))
+                                    .and_then(|v| v.as_str())
+                                {
+                                    message.metadata.insert("msg_type".to_string(), event_type.to_string());
+                                }
+                                if let Err(e) = bus
+                                    .send(ChannelEvent::MessageReceived {
+                                        platform: PlatformType::DingTalk,
+                                        channel_id: chat_id,
+                                        message,
+                                    })
+                                    .await
+                                {
+                                    warn!("Failed to emit DingTalk ChannelEvent: {}", e);
+                                } else {
+                                    info!("📨 Emitted DingTalk ChannelEvent from sender {}", sender_id);
+                                }
+                            }
+                        }
                     }
                     DingTalkWsMessage::Ping => {
                         debug!("Received ping");
@@ -449,20 +557,23 @@ impl DingTalkChannel {
     }
 
     /// Run WebSocket listener
-    async fn run_websocket_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
-        // WebSocket listener is already running in the connection task
-        // Just keep this task alive
+    async fn run_websocket_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+        // P1 FIX: Store event_bus so connect_websocket can emit events
+        *self.event_bus.write().await = Some(event_bus);
+        // Keep this task alive so listener_handle is non-empty
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     }
 
     /// Run webhook listener
-    async fn run_webhook_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+    async fn run_webhook_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
         info!(
             "DingTalk webhook listener started on port {}",
             self.config.base.webhook_port
         );
+        // P1 FIX: Store event_bus
+        *self.event_bus.write().await = Some(event_bus);
         // TODO: Implement HTTP server for webhook
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -470,8 +581,10 @@ impl DingTalkChannel {
     }
 
     /// Run polling listener
-    async fn run_polling_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+    async fn run_polling_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
         info!("DingTalk polling listener started");
+        // P1 FIX: Store event_bus
+        *self.event_bus.write().await = Some(event_bus);
         // TODO: Implement polling for events
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -618,6 +731,7 @@ impl Clone for DingTalkChannel {
             ws_state: self.ws_state.clone(),
             ws_sender: Arc::new(RwLock::new(None)),
             listener_handle: Arc::new(RwLock::new(None)),
+            event_bus: self.event_bus.clone(),
         }
     }
 }

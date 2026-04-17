@@ -6,6 +6,7 @@
 //! Refactored to use common webhook utilities from the common module.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use tracing::{debug, error, info, warn};
 use crate::communication::webhook::{
     SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 // Import common webhook utilities
@@ -223,6 +224,7 @@ pub struct SlackWebhookHandler {
     // Use common verifier for standard cases
     #[allow(dead_code)]
     token_verifier: TokenVerifier,
+    dispatcher: Option<Arc<AgentMessageDispatcher>>,
 }
 
 impl SlackWebhookHandler {
@@ -239,7 +241,14 @@ impl SlackWebhookHandler {
             config,
             signing_secret: signing_secret.clone(),
             token_verifier: verifier,
+            dispatcher: None,
         }
+    }
+
+    /// Attach an agent message dispatcher.
+    pub fn with_dispatcher(mut self, dispatcher: Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -529,17 +538,31 @@ impl WebhookHandler for SlackWebhookHandler {
 
     async fn handle_event(&self, event: WebhookEvent) -> Result<()> {
         match event.event_type {
-            WebhookEventType::MessageReceived => {
+            WebhookEventType::MessageReceived | WebhookEventType::BotMentioned => {
                 if let Some(msg) = &event.message {
                     info!(
                         "Received message from Slack: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
-                }
-            }
-            WebhookEventType::BotMentioned => {
-                if let Some(msg) = &event.message {
-                    info!("Bot mentioned in Slack: {}", msg.content);
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     let platform_user_id = event.metadata.get("team_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //     let target_channel_id = msg.metadata.get("channel_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::Slack,
+                    //         &platform_user_id,
+                    //         msg.clone(),
+                    //         target_channel_id,
+                    //     ).await?;
+                    // }
                 }
             }
             WebhookEventType::UserJoined => info!("User joined Slack channel"),

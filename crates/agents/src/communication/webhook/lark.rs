@@ -16,7 +16,7 @@ use crate::communication::webhook::{
     utils, SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
 use super::common::{MetadataBuilder, TokenVerifier, SignatureVerifier, SignatureVerification as CommonSignatureVerification};
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 /// Lark webhook payload
@@ -149,6 +149,7 @@ pub struct LarkWebhookHandler {
     config: WebhookConfig,
     verification_token: String,
     encrypt_key: Option<Vec<u8>>,
+    dispatcher: Option<std::sync::Arc<AgentMessageDispatcher>>,
 }
 
 impl LarkWebhookHandler {
@@ -183,7 +184,15 @@ impl LarkWebhookHandler {
             config,
             verification_token,
             encrypt_key: encrypt_key_bytes,
+            dispatcher: None,
         }
+    }
+
+    /// Attach an `AgentMessageDispatcher` so that incoming messages are
+    /// routed to the appropriate agents instead of just being logged.
+    pub fn with_dispatcher(mut self, dispatcher: std::sync::Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -401,16 +410,32 @@ impl WebhookHandler for LarkWebhookHandler {
 
     async fn handle_event(&self, event: WebhookEvent) -> Result<()> {
         match event.event_type {
-            WebhookEventType::MessageReceived => {
+            WebhookEventType::MessageReceived | WebhookEventType::BotMentioned => {
                 if let Some(msg) = &event.message {
                     info!(
                         "Received message from Lark: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     let tenant_key = event.metadata.get("tenant_key")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //     let chat_id = msg.metadata.get("chat_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::Lark,
+                    //         &tenant_key,
+                    //         msg.clone(),
+                    //         chat_id,
+                    //     ).await?;
+                    // }
                 }
-            }
-            WebhookEventType::BotMentioned => {
-                info!("Bot mentioned in Lark");
             }
             WebhookEventType::UserJoined => {
                 info!("User joined Lark chat");

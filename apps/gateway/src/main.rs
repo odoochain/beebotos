@@ -54,6 +54,13 @@ use beebotos_agents::{
     WebChatFactory,
 };
 use beebotos_agents::communication::channel::WeChatFactory;
+use beebotos_agents::communication::channel_instance_manager::ChannelInstanceManager;
+use beebotos_agents::communication::message_router_v2::{AgentMessageDispatcher, InboundMessageRouter};
+use beebotos_agents::communication::offline_message_store_sqlite::SqliteOfflineMessageStore;
+use beebotos_agents::services::{
+    plaintext_encryptor, AgentChannelService, SqliteAgentChannelBindingStore,
+    SqliteUserChannelStore, UserChannelService,
+};
 use tracing::{error, info, warn};
 
 // 🟢 P1 FIX: Import gateway-lib traits and types
@@ -135,6 +142,14 @@ pub struct AppState {
     pub channel_registry: Option<Arc<ChannelRegistry>>,
     /// Channel event bus sender for starting listeners outside initialization
     pub channel_event_bus: Option<mpsc::Sender<beebotos_agents::communication::channel::ChannelEvent>>,
+    /// New multi-instance channel manager
+    pub channel_instance_manager: Option<Arc<ChannelInstanceManager>>,
+    /// Message dispatcher for inbound webhook events
+    pub agent_message_dispatcher: Option<Arc<AgentMessageDispatcher>>,
+    /// User channel service (lifecycle + storage)
+    pub user_channel_service: Option<Arc<UserChannelService>>,
+    /// Agent channel service (bindings)
+    pub agent_channel_service: Option<Arc<AgentChannelService>>,
     /// Kernel reference for health checks and direct access
     pub kernel: Arc<beebotos_kernel::Kernel>,
     /// LLM service for processing messages
@@ -269,18 +284,10 @@ impl AppState {
             config.clone(),
         );
 
-        // Initialize webhook state
+        // Initialize webhook state (handlers registered later with dispatcher)
         let webhook_state = Arc::new(RwLock::new(
             handlers::http::webhooks::WebhookHandlerState::new(),
         ));
-
-        // Register webhook handlers
-        {
-            let state = webhook_state.write().await;
-            if let Err(e) = state.register_handlers().await {
-                warn!("Failed to register some webhook handlers: {}", e);
-            }
-        }
 
         // Legacy: Get state manager handle from runtime manager
         let state_manager = agent_runtime_manager.state_manager();
@@ -390,13 +397,15 @@ impl AppState {
         let skill_registry = Arc::new(beebotos_agents::skills::SkillRegistry::new());
         info!("✅ SkillRegistry initialized");
 
-        // Initialize channel binding store
+        // Initialize channel binding store (LEGACY — deprecated)
+        // P2 OPTIMIZE: This is the old single-binding system. New code should use
+        // UserChannelService + AgentChannelService. Run migrate-bindings API to migrate.
         let channel_binding_store = Arc::new(
             gateway::ChannelBindingStore::new(db.clone())
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to initialize ChannelBindingStore: {}", e))?
         );
-        info!("✅ ChannelBindingStore initialized");
+        info!("✅ ChannelBindingStore initialized (LEGACY — migrate to new system when ready)");
 
         let agent_resolver = Arc::new(
             AgentResolver::new(
@@ -427,6 +436,10 @@ impl AppState {
             webhook_state,
             channel_registry: None,
             channel_event_bus: None,
+            channel_instance_manager: None,
+            agent_message_dispatcher: None,
+            user_channel_service: None,
+            agent_channel_service: None,
             kernel,
             llm_service,
             skill_registry: Some(skill_registry),
@@ -569,6 +582,66 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     app_state.channel_registry = channel_registry.clone();
     app_state.channel_event_bus = Some(event_tx.clone());
+
+    // Wire new multi-instance channel infrastructure
+    if let Some(ref registry) = channel_registry {
+        let instance_manager = registry.instance_manager();
+
+        // Start health monitor for auto-reconnect
+        instance_manager.start_health_monitor(Duration::from_secs(30));
+
+        // Initialize SQLite-backed stores
+        let db = app_state.db.clone();
+        let user_channel_store = Arc::new(SqliteUserChannelStore::new(db.clone()));
+        let agent_channel_store = Arc::new(SqliteAgentChannelBindingStore::new(db.clone()));
+        let offline_store = Arc::new(SqliteOfflineMessageStore::new(db.clone()));
+
+        // Build routers and dispatcher
+        let inbound_router = Arc::new(InboundMessageRouter::new(
+            user_channel_store.clone(),
+            agent_channel_store.clone(),
+        ));
+        let dispatcher = Arc::new(AgentMessageDispatcher::new(inbound_router, offline_store));
+
+        // Build services
+        let encryptor = plaintext_encryptor();
+        let user_channel_service = Arc::new(UserChannelService::new(
+            user_channel_store,
+            instance_manager.clone(),
+            encryptor,
+        ));
+        let agent_channel_service =
+            Arc::new(AgentChannelService::new(agent_channel_store));
+
+        app_state.channel_instance_manager = Some(instance_manager);
+        app_state.agent_message_dispatcher = Some(dispatcher.clone());
+        app_state.user_channel_service = Some(user_channel_service.clone());
+        app_state.agent_channel_service = Some(agent_channel_service.clone());
+
+        // 🟢 P1 FIX: Rebuild AgentResolver with both legacy and new binding systems
+        if app_state.agent_resolver.is_some() {
+            let new_resolver = AgentResolver::new(
+                app_state.config.channels.default_agent_id.clone(),
+                app_state.state_store.clone(),
+                app_state.agent_runtime.clone(),
+            )
+            .with_channel_binding_store(
+                app_state.channel_binding_store.as_ref().unwrap().clone(),
+            )
+            .with_agent_channel_service(agent_channel_service)
+            .with_user_channel_service(user_channel_service.clone());
+            app_state.agent_resolver = Some(Arc::new(new_resolver));
+        }
+
+        // Register webhook handlers with dispatcher
+        {
+            let state = app_state.webhook_state.write().await;
+            if let Err(e) = state.register_handlers(Some(dispatcher)).await {
+                warn!("Failed to register some webhook handlers: {}", e);
+            }
+        }
+    }
+
     // Initialize MessageProcessor now that channel_registry is available
     if let Some(ref registry) = channel_registry {
         app_state.message_processor = Some(Arc::new(MessageProcessor::new(
@@ -1051,6 +1124,10 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v2/agents/:id/channels", post(handlers::http::agents_v2::bind_agent_channel))
         .route("/api/v2/agents/:id/channels", get(handlers::http::agents_v2::list_agent_channels))
         .route("/api/v2/agents/:id/channels/:channel_id", delete(handlers::http::agents_v2::unbind_agent_channel))
+        // P2 FIX: Pure new-system Agent-Channel binding APIs
+        .route("/api/v2/agents/:id/agent-channel-bindings", post(handlers::http::agents_v2::bind_agent_channel_v2))
+        .route("/api/v2/agents/:id/agent-channel-bindings", get(handlers::http::agents_v2::list_agent_channel_bindings_v2))
+        .route("/api/v2/agents/:id/agent-channel-bindings/unbind", post(handlers::http::agents_v2::unbind_agent_channel_v2))
         // Capability API
         .route("/api/v1/capabilities", get(agents::list_capability_types))
         .route("/api/v1/capabilities/validate", post(agents::validate_capabilities))
@@ -1120,6 +1197,15 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/channels/wechat/qr", post(handlers::http::channels::get_wechat_qr))
         .route("/api/v1/channels/wechat/qr/check", post(handlers::http::channels::check_wechat_qr))
         .route("/api/v1/channels/webchat/messages", post(handlers::http::channels::send_webchat_message))
+        // P2 FIX: User Channel management APIs
+        .route("/api/v2/user-channels", post(handlers::http::user_channels::create_user_channel))
+        .route("/api/v2/user-channels", get(handlers::http::user_channels::list_user_channels))
+        .route("/api/v2/user-channels/:id", get(handlers::http::user_channels::get_user_channel))
+        .route("/api/v2/user-channels/:id", delete(handlers::http::user_channels::delete_user_channel))
+        .route("/api/v2/user-channels/:id/connect", post(handlers::http::user_channels::connect_user_channel))
+        .route("/api/v2/user-channels/:id/disconnect", post(handlers::http::user_channels::disconnect_user_channel))
+        // P2 FIX: Admin migration API
+        .route("/api/v1/admin/migrate-bindings", post(handlers::http::agents_v2::migrate_legacy_bindings))
         // WebSocket broadcast (admin only)
         .route(
             "/api/v1/ws/broadcast",
@@ -1378,6 +1464,7 @@ mod tests {
                 auto_reply: true,
                 enable_typing_indicator: true,
                 enabled_platforms: vec!["lark".to_string()],
+                default_agent_id: None,
                 lark: None,
                 dingtalk: None,
                 telegram: None,
@@ -1385,6 +1472,7 @@ mod tests {
                 slack: None,
                 wechat: None,
                 personal_wechat: None,
+                webchat: None,
                 teams: None,
                 twitter: None,
                 whatsapp: None,
@@ -1435,6 +1523,7 @@ mod tests {
                 dao_contract_address: None,
                 skill_nft_contract_address: None,
             },
+            wizard: color_theme::WizardConfig::default(),
         }
     }
 

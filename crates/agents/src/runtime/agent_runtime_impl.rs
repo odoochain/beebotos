@@ -912,7 +912,7 @@ mod tests {
             database_url: "sqlite://./data/beebotos.db".to_string(),
         };
 
-        let runtime = GatewayAgentRuntime::new(None, None, config).await;
+        let runtime = GatewayAgentRuntime::new(None, None, config, None).await;
         assert!(runtime.is_ok());
     }
 }

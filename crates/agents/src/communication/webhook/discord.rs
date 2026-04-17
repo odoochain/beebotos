@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use crate::communication::webhook::{
     SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 // Import common webhook utilities
@@ -235,6 +235,7 @@ pub struct DiscordTextInput {
 pub struct DiscordWebhookHandler {
     config: WebhookConfig,
     public_key: String,
+    dispatcher: Option<std::sync::Arc<AgentMessageDispatcher>>,
 }
 
 impl DiscordWebhookHandler {
@@ -245,7 +246,12 @@ impl DiscordWebhookHandler {
         config.endpoint_path = "/webhook/discord".to_string();
         config.verify_signatures = true;
 
-        Self { config, public_key }
+        Self { config, public_key, dispatcher: None }
+    }
+
+    pub fn with_dispatcher(mut self, dispatcher: std::sync::Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -435,17 +441,32 @@ impl WebhookHandler for DiscordWebhookHandler {
 
     async fn handle_event(&self, event: WebhookEvent) -> Result<()> {
         match event.event_type {
-            WebhookEventType::BotMentioned => {
+            WebhookEventType::BotMentioned | WebhookEventType::MessageReceived => {
                 if let Some(msg) = &event.message {
                     info!(
                         "Received Discord command: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
-                }
-            }
-            WebhookEventType::MessageReceived => {
-                if let Some(msg) = &event.message {
-                    info!("Received Discord component interaction: {}", msg.content);
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     let platform_user_id = event.metadata.get("guild_id")
+                    //         .or_else(|| event.metadata.get("application_id"))
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //     let target_channel_id = msg.metadata.get("channel_id")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::Discord,
+                    //         &platform_user_id,
+                    //         msg.clone(),
+                    //         target_channel_id,
+                    //     ).await?;
+                    // }
                 }
             }
             WebhookEventType::System => {

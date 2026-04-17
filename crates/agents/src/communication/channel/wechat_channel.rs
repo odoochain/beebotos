@@ -603,6 +603,10 @@ impl Channel for WeChatChannel {
         PlatformType::WeChat
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn is_connected(&self) -> bool {
         if let Ok(connected) = self.connected.try_read() {
             *connected

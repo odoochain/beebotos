@@ -14,10 +14,33 @@ pub mod webhook;
 // 🟢 P0 FIX: Message history tracking
 pub mod message_history;
 
+// Multi-user multi-agent channel architecture
+pub mod user_channel;
+pub mod agent_channel;
+pub mod channel_instance_manager;
+pub mod message_router_v2;
+pub mod offline_message_store;
+pub mod offline_message_store_sqlite;
+
 pub use message_history::{
     MessageHistoryStore, MessageEditRecord, MessageDeletionRecord, MessagePinRecord,
     MessageSnapshot, HistoryQuery, HistoryQueryResult, OperationType,
     ChannelHistoryExport, MessageHistoryStats, SearchResult,
+};
+
+pub use user_channel::{
+    ChannelBindingStatus, ChannelInstanceId, ChannelInstanceRef,
+    PlatformCredentials, UserChannelBinding, UserChannelConfig,
+};
+pub use agent_channel::{AgentChannelBinding, RoutingRules};
+pub use channel_instance_manager::{ChannelInstanceManager, ChannelInstanceStatus};
+pub use message_router_v2::{
+    AgentMessageDispatcher, InboundMessageRouter, OutboundMessageRouter,
+    ReplyRoute, RoutingDecision, UserMessageContext,
+};
+pub use offline_message_store::OfflineMessageStore;
+pub use offline_message_store_sqlite::{
+    MemoryOfflineMessageStore, SqliteOfflineMessageStore,
 };
 
 use std::collections::HashMap;

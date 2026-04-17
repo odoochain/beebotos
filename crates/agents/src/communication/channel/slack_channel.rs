@@ -160,6 +160,8 @@ pub struct SlackChannel {
     ws_sender: Arc<RwLock<Option<mpsc::UnboundedSender<WsMessage>>>>,
     listener_handle: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     bot_info: Arc<RwLock<Option<SlackUser>>>,
+    /// Event bus for emitting channel events
+    event_bus: Arc<RwLock<Option<mpsc::Sender<ChannelEvent>>>>,
 }
 
 impl SlackChannel {
@@ -172,6 +174,7 @@ impl SlackChannel {
             ws_sender: Arc::new(RwLock::new(None)),
             listener_handle: Arc::new(RwLock::new(None)),
             bot_info: Arc::new(RwLock::new(None)),
+            event_bus: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -326,6 +329,7 @@ impl SlackChannel {
         // Spawn WebSocket handler
         let auto_reconnect = self.config.base.auto_reconnect;
         let _max_reconnect_attempts = self.config.base.max_reconnect_attempts;
+        let channel = self.clone();
 
         tokio::spawn(async move {
             let mut heartbeat_interval = interval(Duration::from_secs(30));
@@ -336,7 +340,7 @@ impl SlackChannel {
                         match msg {
                             Ok(WsMessage::Text(text)) => {
                                 debug!("Received Socket Mode message: {}", text);
-                                if let Err(e) = Self::handle_socket_message(&text).await {
+                                if let Err(e) = channel.handle_socket_message(&text).await {
                                     warn!("Failed to handle Socket Mode message: {}", e);
                                 }
                             }
@@ -381,7 +385,7 @@ impl SlackChannel {
     }
 
     /// Handle Socket Mode message
-    async fn handle_socket_message(text: &str) -> Result<()> {
+    async fn handle_socket_message(&self, text: &str) -> Result<()> {
         match serde_json::from_str::<SlackSocketMessage>(text) {
             Ok(msg) => {
                 match msg {
@@ -390,10 +394,13 @@ impl SlackChannel {
                     }
                     SlackSocketMessage::EventsApi {
                         envelope_id,
-                        payload: _,
+                        payload,
                     } => {
                         debug!("Received events API payload: {}", envelope_id);
-                        // Process events
+                        // 🟢 P1 FIX: Process message events and emit ChannelEvent
+                        if let Err(e) = self.process_events_api_payload(&payload).await {
+                            warn!("Failed to process Events API payload: {}", e);
+                        }
                     }
                     SlackSocketMessage::Disconnect { reason } => {
                         warn!("Socket Mode disconnect: {:?}", reason);
@@ -410,6 +417,87 @@ impl SlackChannel {
                 warn!("Failed to parse Socket Mode message: {}", e);
             }
         }
+        Ok(())
+    }
+
+    /// Process an Events API payload and emit ChannelEvent for message events.
+    async fn process_events_api_payload(&self, payload: &serde_json::Value) -> Result<()> {
+        let event = payload.get("event");
+        let event_type = event
+            .and_then(|e| e.get("type"))
+            .and_then(|v| v.as_str());
+
+        if event_type != Some("message") {
+            return Ok(());
+        }
+
+        // Ignore bot's own messages
+        if let Some(bot_id) = event.and_then(|e| e.get("bot_id")).and_then(|v| v.as_str()) {
+            if let Some(ref bot_info) = *self.bot_info.read().await {
+                if bot_id == bot_info.id {
+                    return Ok(());
+                }
+            }
+        }
+
+        let user = event
+            .and_then(|e| e.get("user"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let text = event
+            .and_then(|e| e.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let channel = event
+            .and_then(|e| e.get("channel"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let ts = event
+            .and_then(|e| e.get("ts"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if user.is_empty() || text.is_empty() {
+            return Ok(());
+        }
+
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("user_id".to_string(), user.clone());
+        metadata.insert("channel".to_string(), channel.clone());
+        metadata.insert("message_ts".to_string(), ts.clone());
+        metadata.insert("sender_id".to_string(), user.clone());
+        metadata.insert("channel_id".to_string(), channel.clone());
+
+        let message = Message {
+            id: uuid::Uuid::new_v4(),
+            thread_id: uuid::Uuid::new_v4(),
+            platform: PlatformType::Slack,
+            message_type: MessageType::Text,
+            content: text,
+            metadata,
+            timestamp: chrono::Utc::now(),
+        };
+
+        let event = ChannelEvent::MessageReceived {
+            platform: PlatformType::Slack,
+            channel_id: user.clone(),
+            message,
+        };
+
+        if let Some(ref tx) = *self.event_bus.read().await {
+            if let Err(e) = tx.send(event).await {
+                warn!("Failed to send ChannelEvent to event bus: {}", e);
+            } else {
+                info!("📨 Emitted ChannelEvent::MessageReceived for Slack user {}", user);
+            }
+        } else {
+            warn!("Event bus not set, cannot emit ChannelEvent");
+        }
+
         Ok(())
     }
 
@@ -431,19 +519,23 @@ impl SlackChannel {
     }
 
     /// Run Socket Mode listener
-    async fn run_socket_mode_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
-        // Socket Mode listener is already running in the connection task
+    async fn run_socket_mode_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+        // Store event bus so the WebSocket handler can emit events
+        *self.event_bus.write().await = Some(event_bus);
+        // The actual WebSocket read loop is spawned inside connect_socket_mode.
+        // This task just keeps alive so the listener_handle is non-empty.
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
     }
 
     /// Run webhook listener
-    async fn run_webhook_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+    async fn run_webhook_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
         info!(
             "Slack webhook listener started on port {}",
             self.config.base.webhook_port
         );
+        *self.event_bus.write().await = Some(event_bus);
         // TODO: Implement HTTP server for webhook
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -609,6 +701,7 @@ impl Clone for SlackChannel {
             ws_sender: Arc::new(RwLock::new(None)),
             listener_handle: Arc::new(RwLock::new(None)),
             bot_info: self.bot_info.clone(),
+            event_bus: self.event_bus.clone(),
         }
     }
 }

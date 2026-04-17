@@ -1586,7 +1586,7 @@ mod tests {
     #[test]
     fn test_validate_ethereum_address() {
         assert!(ConfigWizard::validate_ethereum_address("")); // Empty is allowed
-        assert!(ConfigWizard::validate_ethereum_address("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"));
+        assert!(ConfigWizard::validate_ethereum_address("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"));
         assert!(ConfigWizard::validate_ethereum_address("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEBD"));
         assert!(!ConfigWizard::validate_ethereum_address("0xinvalid"));
         assert!(!ConfigWizard::validate_ethereum_address("not_an_address"));

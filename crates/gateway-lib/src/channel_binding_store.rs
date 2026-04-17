@@ -15,7 +15,11 @@ use tracing::{debug, info, warn};
 
 use crate::error::{GatewayError, Result};
 
-/// Channel-Agent binding record
+/// Channel-Agent binding record (LEGACY — deprecated, use `agent_channel_bindings` table instead)
+///
+/// P2 OPTIMIZE: This struct and the `ChannelBindingStore` below are part of the legacy
+/// binding system. New code should use `AgentChannelService` + `AgentChannelBinding`
+/// from `beebotos_agents::services` and `beebotos_agents::communication::agent_channel`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelBinding {
     pub platform: String,
@@ -24,7 +28,15 @@ pub struct ChannelBinding {
     pub created_at: String,
 }
 
-/// Store for channel-agent bindings
+/// Store for channel-agent bindings (LEGACY — deprecated)
+///
+/// P2 OPTIMIZE: This store is maintained for backward compatibility only.
+/// The new multi-user multi-agent architecture uses:
+/// - `UserChannelService` for user-channel lifecycle
+/// - `AgentChannelService` for agent-channel bindings with routing rules
+///
+/// To migrate existing data, call `POST /api/v1/admin/migrate-bindings` once
+/// after the new-system services are initialized.
 #[derive(Clone)]
 pub struct ChannelBindingStore {
     db: SqlitePool,

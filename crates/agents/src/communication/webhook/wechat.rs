@@ -5,6 +5,7 @@
 //! (AES-CBC).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use tracing::{debug, info};
 use crate::communication::webhook::{
     SignatureVerification, WebhookConfig, WebhookEvent, WebhookEventType, WebhookHandler,
 };
-use crate::communication::{Message, MessageType, PlatformType};
+use crate::communication::{AgentMessageDispatcher, Message, MessageType, PlatformType};
 use crate::error::{AgentError, Result};
 
 use super::common::{MetadataBuilder, encryption};
@@ -149,6 +150,7 @@ pub struct WeChatWebhookHandler {
     corp_id: String,
     token: String,
     encoding_aes_key: Option<String>,
+    dispatcher: Option<Arc<AgentMessageDispatcher>>,
 }
 
 impl WeChatWebhookHandler {
@@ -170,7 +172,14 @@ impl WeChatWebhookHandler {
             corp_id,
             token,
             encoding_aes_key,
+            dispatcher: None,
         }
+    }
+
+    /// Attach an agent message dispatcher.
+    pub fn with_dispatcher(mut self, dispatcher: Arc<AgentMessageDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
     }
 
     /// Create handler from environment variables
@@ -631,12 +640,31 @@ impl WebhookHandler for WeChatWebhookHandler {
 
     async fn handle_event(&self, event: WebhookEvent) -> Result<()> {
         match event.event_type {
-            WebhookEventType::MessageReceived => {
+            WebhookEventType::MessageReceived | WebhookEventType::BotMentioned => {
                 if let Some(msg) = &event.message {
                     info!(
                         "Received message from WeChat Work: {} (type: {:?})",
                         msg.content, msg.message_type
                     );
+
+                    // P0 FIX: Removed dispatcher.dispatch() to avoid duplicate processing.
+                    // Messages are now routed exclusively through channel_event_bus →
+                    // MessageProcessor → AgentResolver path in webhook_handler.
+                    // if let Some(dispatcher) = &self.dispatcher {
+                    //     let platform_user_id = event.metadata.get("to_user_name")
+                    //         .cloned()
+                    //         .unwrap_or_else(|| self.corp_id.clone());
+                    //     let target_channel_id = msg.metadata.get("from_user_name")
+                    //         .cloned()
+                    //         .unwrap_or_default();
+                    //
+                    //     dispatcher.dispatch(
+                    //         PlatformType::WeChat,
+                    //         &platform_user_id,
+                    //         msg.clone(),
+                    //         target_channel_id,
+                    //     ).await?;
+                    // }
                 }
             }
             WebhookEventType::UserJoined => {
@@ -644,9 +672,6 @@ impl WebhookHandler for WeChatWebhookHandler {
             }
             WebhookEventType::UserLeft => {
                 info!("User unsubscribed from WeChat Work agent");
-            }
-            WebhookEventType::BotMentioned => {
-                info!("Menu clicked in WeChat Work");
             }
             WebhookEventType::System => {
                 debug!("Received system event from WeChat Work");

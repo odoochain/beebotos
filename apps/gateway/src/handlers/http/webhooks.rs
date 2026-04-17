@@ -15,7 +15,8 @@ use beebotos_agents::communication::webhook::{
     TelegramWebhookConfig, TelegramWebhookHandler, TwitterWebhookHandler, WeChatWebhookHandler,
     WebhookConfig, WebhookHandler, WebhookManager, WhatsAppWebhookHandler,
 };
-use beebotos_agents::communication::PlatformType;
+use beebotos_agents::communication::channel::ChannelEvent;
+use beebotos_agents::communication::{AgentMessageDispatcher, PlatformType};
 use serde_json::json;
 use tracing::{debug, error, info, warn};
 
@@ -51,13 +52,19 @@ impl WebhookHandlerState {
         Self { manager, configs }
     }
 
-    /// Register all platform handlers
-    pub async fn register_handlers(&self) -> Result<(), GatewayError> {
+    /// Register all platform handlers with an optional dispatcher.
+    pub async fn register_handlers(
+        &self,
+        dispatcher: Option<Arc<AgentMessageDispatcher>>,
+    ) -> Result<(), GatewayError> {
         // Register Lark handler
         if let Ok((verification_token, encrypt_key)) = load_lark_config() {
-            let handler = Arc::new(LarkWebhookHandler::new(verification_token, encrypt_key));
+            let mut handler = LarkWebhookHandler::new(verification_token, encrypt_key);
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
             self.manager
-                .register_handler(handler)
+                .register_handler(Arc::new(handler))
                 .await
                 .map_err(|e| internal_error(format!("Failed to register Lark handler: {}", e)))?;
             info!("Registered Lark webhook handler at /webhook/lark");
@@ -65,8 +72,11 @@ impl WebhookHandlerState {
 
         // Register DingTalk handler
         if let Ok((app_key, app_secret)) = load_dingtalk_config() {
-            let handler = Arc::new(DingTalkWebhookHandler::new(app_key, app_secret, None));
-            self.manager.register_handler(handler).await.map_err(|e| {
+            let mut handler = DingTalkWebhookHandler::new(app_key, app_secret, None);
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
+            self.manager.register_handler(Arc::new(handler)).await.map_err(|e| {
                 internal_error(format!("Failed to register DingTalk handler: {}", e))
             })?;
             info!("Registered DingTalk webhook handler at /webhook/dingtalk");
@@ -74,8 +84,11 @@ impl WebhookHandlerState {
 
         // Register Telegram handler
         if let Ok(telegram_config) = load_telegram_config() {
-            let handler = Arc::new(TelegramWebhookHandler::new(telegram_config.clone()));
-            self.manager.register_handler(handler).await.map_err(|e| {
+            let mut handler = TelegramWebhookHandler::new(telegram_config.clone());
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
+            self.manager.register_handler(Arc::new(handler)).await.map_err(|e| {
                 internal_error(format!("Failed to register Telegram handler: {}", e))
             })?;
             info!(
@@ -86,8 +99,11 @@ impl WebhookHandlerState {
 
         // Register Discord handler
         if let Ok(public_key) = load_discord_config() {
-            let handler = Arc::new(DiscordWebhookHandler::new(public_key));
-            self.manager.register_handler(handler).await.map_err(|e| {
+            let mut handler = DiscordWebhookHandler::new(public_key);
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
+            self.manager.register_handler(Arc::new(handler)).await.map_err(|e| {
                 internal_error(format!("Failed to register Discord handler: {}", e))
             })?;
             info!("Registered Discord webhook handler at /webhook/discord");
@@ -95,9 +111,12 @@ impl WebhookHandlerState {
 
         // Register Slack handler
         if let Ok(signing_secret) = load_slack_config() {
-            let handler = Arc::new(SlackWebhookHandler::new(signing_secret));
+            let mut handler = SlackWebhookHandler::new(signing_secret);
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
             self.manager
-                .register_handler(handler)
+                .register_handler(Arc::new(handler))
                 .await
                 .map_err(|e| internal_error(format!("Failed to register Slack handler: {}", e)))?;
             info!("Registered Slack webhook handler at /webhook/slack");
@@ -105,9 +124,12 @@ impl WebhookHandlerState {
 
         // Register WeChat handler
         if let Ok((corp_id, token, encoding_aes_key)) = load_wechat_config() {
-            let handler = Arc::new(WeChatWebhookHandler::new(corp_id, token, encoding_aes_key));
+            let mut handler = WeChatWebhookHandler::new(corp_id, token, encoding_aes_key);
+            if let Some(ref d) = dispatcher {
+                handler = handler.with_dispatcher(d.clone());
+            }
             self.manager
-                .register_handler(handler)
+                .register_handler(Arc::new(handler))
                 .await
                 .map_err(|e| internal_error(format!("Failed to register WeChat handler: {}", e)))?;
             info!("Registered WeChat webhook handler at /webhook/wechat");
@@ -485,9 +507,14 @@ async fn process_message(
     );
 
     // Extract channel_id from metadata for reply
+    // P1 FIX: Support platform-specific equivalents (chat_id, room_id, conversation_id)
     let channel_id = message
         .metadata
         .get("channel_id")
+        .or_else(|| message.metadata.get("chat_id"))
+        .or_else(|| message.metadata.get("room_id"))
+        .or_else(|| message.metadata.get("conversation_id"))
+        .or_else(|| message.metadata.get("sender_id")) // DingTalk / WeChat fallback
         .cloned()
         .unwrap_or_default();
 
@@ -503,6 +530,33 @@ async fn process_message(
         .or_else(|| message.metadata.get("from_user"))
         .cloned()
         .unwrap_or_else(|| channel_id.clone());
+
+    // 🟢 P0 FIX: Route through new architecture if channel event bus is available
+    if let Some(ref event_bus) = state.channel_event_bus {
+        info!(
+            "Routing webhook message from {} on {:?} through channel_event_bus (new architecture)",
+            sender_id, message.platform
+        );
+        let event = ChannelEvent::MessageReceived {
+            platform: message.platform,
+            channel_id: channel_id.clone(),
+            message: message.clone(),
+        };
+        if let Err(e) = event_bus.send(event).await {
+            error!("Failed to send message to channel event bus: {}", e);
+            return Err(GatewayError::internal(format!(
+                "Failed to route message to agent system: {}",
+                e
+            )));
+        }
+        return Ok(());
+    }
+
+    // Fallback: direct LLM processing (legacy path)
+    warn!(
+        "channel_event_bus not available, falling back to direct LLM processing for {:?}",
+        message.platform
+    );
 
     // Call LLM to generate response
     let reply_content = match state.llm_service.process_message(&message).await {
@@ -711,9 +765,9 @@ fn load_imessage_config() -> Result<WebhookConfig, Box<dyn std::error::Error>> {
 
 /// Message deduplication cache
 /// Stores recently processed message IDs to prevent duplicate processing
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use std::sync::LazyLock;
+use tokio::sync::Mutex;
 
 /// Entry in the deduplication cache
 struct DedupEntry {
@@ -736,8 +790,8 @@ static PROCESSED_MESSAGES: LazyLock<Mutex<Vec<DedupEntry>>> =
     LazyLock::new(|| Mutex::new(Vec::with_capacity(1000)));
 
 /// Check if a message has been processed recently
-fn is_message_processed(msg_id: &str) -> bool {
-    let mut cache = PROCESSED_MESSAGES.lock().unwrap();
+async fn is_message_processed(msg_id: &str) -> bool {
+    let mut cache = PROCESSED_MESSAGES.lock().await;
 
     // Clean up old entries (older than 5 minutes)
     let now = Instant::now();
@@ -773,7 +827,7 @@ async fn process_message_async(
         .unwrap_or_else(|| message.id.to_string());
 
     // Check for duplicates
-    if is_message_processed(&dedup_key) {
+    if is_message_processed(&dedup_key).await {
         info!("Skipping duplicate message: {}", dedup_key);
         return Ok(());
     }

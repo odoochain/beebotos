@@ -53,6 +53,7 @@ pub mod deduplicator;
 pub mod device;
 pub mod did;
 pub mod error;
+pub mod services;
 // 🔧 FIX: Error integration with BeeBotOSError
 pub mod error_integration;
 // 🔧 FIX: Integration tests
@@ -111,7 +112,19 @@ pub use communication::channel::{
     DiscordChannelFactory, LarkChannelFactory, PersonalWeChatFactory, SlackChannelFactory, TelegramChannelFactory,
     WebChatFactory,
 };
+pub use communication::{
+    AgentChannelBinding, AgentMessageDispatcher, ChannelBindingStatus,
+    ChannelInstanceId, ChannelInstanceManager, ChannelInstanceRef, ChannelInstanceStatus,
+    InboundMessageRouter, MemoryOfflineMessageStore, OfflineMessageStore,
+    OutboundMessageRouter, ReplyRoute, RoutingDecision, RoutingRules,
+    SqliteOfflineMessageStore, UserChannelBinding, UserChannelConfig, UserMessageContext,
+};
 pub use communication::webhook::*;
+pub use services::{
+    AgentChannelBindingStore, AgentChannelService, ChannelConfigEncryptor,
+    SqliteAgentChannelBindingStore, SqliteUserChannelStore, UserChannelStore, UserChannelService,
+    plaintext_encryptor,
+};
 // 🆕 DEVICE FIX: Re-export device module types
 pub use device::{
     Device, DeviceNode, AndroidDevice, IosDevice,

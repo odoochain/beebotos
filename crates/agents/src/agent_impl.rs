@@ -25,7 +25,8 @@ pub struct Agent {
     pub(crate) config: AgentConfig,
     pub(crate) a2a_client: Option<a2a::A2AClient>,
     pub(crate) mcp_manager: Option<mcp::MCPManager>,
-    pub(crate) platform_manager: Option<communication::channel::ChannelManager>,
+    pub(crate) outbound_router: Option<Arc<communication::OutboundMessageRouter>>,
+    pub(crate) message_rx: Option<tokio::sync::mpsc::Receiver<communication::UserMessageContext>>,
     pub(crate) queue_manager: Option<Arc<queue::QueueManager>>,
     pub(crate) skill_registry: Option<Arc<skills::SkillRegistry>>,
     pub(crate) llm_interface: Option<Arc<dyn communication::LLMCallInterface>>,
@@ -55,7 +56,8 @@ impl Agent {
             config,
             a2a_client: None,
             mcp_manager: None,
-            platform_manager: None,
+            outbound_router: None,
+            message_rx: None,
             queue_manager: None,
             skill_registry: None,
             llm_interface: None,
@@ -85,9 +87,35 @@ impl Agent {
         self
     }
 
-    pub fn with_platforms(mut self, manager: communication::channel::ChannelManager) -> Self {
-        self.platform_manager = Some(manager);
+    pub fn with_outbound_router(mut self, router: Arc<communication::OutboundMessageRouter>) -> Self {
+        self.outbound_router = Some(router);
         self
+    }
+
+    pub fn with_message_rx(mut self, rx: tokio::sync::mpsc::Receiver<communication::UserMessageContext>) -> Self {
+        self.message_rx = Some(rx);
+        self
+    }
+
+    pub fn outbound_router(&self) -> Option<&Arc<communication::OutboundMessageRouter>> {
+        self.outbound_router.as_ref()
+    }
+
+    pub fn has_outbound_router(&self) -> bool {
+        self.outbound_router.is_some()
+    }
+
+    /// Takes ownership of the message receiver (can only be called once).
+    pub fn take_message_rx(&mut self) -> Option<tokio::sync::mpsc::Receiver<communication::UserMessageContext>> {
+        self.message_rx.take()
+    }
+
+    pub fn message_rx_ref(&self) -> Option<&tokio::sync::mpsc::Receiver<communication::UserMessageContext>> {
+        self.message_rx.as_ref()
+    }
+
+    pub fn has_message_rx(&self) -> bool {
+        self.message_rx.is_some()
     }
 
     pub fn with_queue_manager(mut self, manager: Arc<queue::QueueManager>) -> Self {
@@ -282,9 +310,7 @@ impl Agent {
             mcp.initialize_all().await?;
         }
 
-        if let Some(platforms) = self.platform_manager.as_mut() {
-            platforms.connect_all().await;
-        }
+        // Channel lifecycle is managed globally by ChannelInstanceManager, not per-agent.
 
         self.state = state_manager::AgentState::Idle;
         Ok(())
@@ -859,16 +885,7 @@ impl Agent {
             queue.shutdown().await;
         }
 
-        if let Some(platforms) = self.platform_manager.take() {
-            info!("Disconnecting from platforms...");
-            let results = platforms.disconnect_all().await;
-            for (_platform, result) in results {
-                match result {
-                    Ok(()) => info!("Platform disconnected successfully"),
-                    Err(e) => warn!("Error disconnecting platform: {}", e),
-                }
-            }
-        }
+        // Channels are disconnected globally; agent shutdown only cleans its own queue.
 
         if let Some(mcp) = self.mcp_manager.take() {
             info!("Closing MCP connections...");
@@ -1291,7 +1308,7 @@ impl Agent {
         } else {
             Ok(ExecutionResult {
                 success: true,
-                data: Some(serde_json::json!({ "output": step.description.clone() })),
+                data: Some(serde_json::json!({ "output": format!("Step executed successfully: {}", step.description) })),
                 error: None,
                 duration_ms: 0,
                 attempts: 1,

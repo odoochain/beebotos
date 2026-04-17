@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::color_theme::{ColorTheme, WizardConfig};
 
 /// Unified BeeBotOS configuration (TOML format)
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BeeBotOSConfig {
     #[serde(default = "default_system_name")]
     pub system_name: String,
@@ -50,7 +50,7 @@ pub struct BeeBotOSConfig {
     pub wizard: WizardConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -76,8 +76,9 @@ pub struct CorsConfig {
     pub allow_credentials: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DatabaseConfig {
+    #[serde(default = "default_database_url")]
     pub url: String,
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
@@ -96,6 +97,56 @@ fn default_min_connections() -> u32 { 5 }
 fn default_connect_timeout() -> u64 { 10 }
 fn default_idle_timeout() -> u64 { 600 }
 fn default_run_migrations() -> bool { true }
+fn default_database_url() -> String { "sqlite:data/beebotos.db".to_string() }
+
+impl Default for BeeBotOSConfig {
+    fn default() -> Self {
+        Self {
+            system_name: default_system_name(),
+            version: default_version(),
+            server: ServerConfig::default(),
+            database: DatabaseConfig::default(),
+            jwt: JwtConfig::default(),
+            tls: None,
+            models: ModelsConfig::default(),
+            channels: ChannelsConfig::default(),
+            logging: LoggingConfig::default(),
+            metrics: MetricsConfig::default(),
+            tracing: TracingConfig::default(),
+            rate_limit: RateLimitConfig::default(),
+            security: SecurityConfig::default(),
+            services: None,
+            blockchain: BlockchainConfig::default(),
+            wizard: WizardConfig::default(),
+        }
+    }
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            host: default_host(),
+            port: default_port(),
+            timeout_seconds: default_timeout_seconds(),
+            max_body_size_mb: default_max_body_size_mb(),
+            cors: CorsConfig::default(),
+        }
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: default_database_url(),
+            max_connections: default_max_connections(),
+            min_connections: default_min_connections(),
+            connect_timeout_seconds: default_connect_timeout(),
+            idle_timeout_seconds: default_idle_timeout(),
+            run_migrations: default_run_migrations(),
+        }
+    }
+}
+
 fn default_enabled() -> bool { true }
 fn default_max_size_mb() -> u32 { 100 }
 fn default_max_files() -> u32 { 10 }
@@ -761,6 +812,7 @@ mod tests {
                 auto_reply: true,
                 enable_typing_indicator: true,
                 enabled_platforms: vec!["lark".to_string()],
+                default_agent_id: None,
                 lark: None,
                 dingtalk: None,
                 telegram: None,
@@ -768,6 +820,7 @@ mod tests {
                 slack: None,
                 wechat: None,
                 personal_wechat: None,
+                webchat: None,
                 teams: None,
                 twitter: None,
                 whatsapp: None,
@@ -818,6 +871,7 @@ mod tests {
                 dao_contract_address: None,
                 skill_nft_contract_address: None,
             },
+            wizard: WizardConfig::default(),
         };
 
         assert!(config.validate().is_ok());

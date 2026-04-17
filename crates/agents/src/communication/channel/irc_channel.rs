@@ -36,7 +36,7 @@ use uuid::Uuid;
 pub struct IRCChannel {
     config: IRCConfig,
     state: Arc<Mutex<IRCState>>,
-    event_sender: Option<mpsc::Sender<ChannelEvent>>,
+    event_sender: Arc<tokio::sync::Mutex<Option<mpsc::Sender<ChannelEvent>>>>,
     writer_tx: Option<mpsc::Sender<String>>,
 }
 
@@ -359,7 +359,7 @@ impl IRCChannel {
                 nickname,
                 channels: Vec::new(),
             })),
-            event_sender: None,
+            event_sender: Arc::new(tokio::sync::Mutex::new(None)),
             writer_tx: None,
         })
     }
@@ -541,7 +541,7 @@ impl Channel for IRCChannel {
         let writer_tx_for_read = writer_tx.clone();
         self.writer_tx = Some(writer_tx);
 
-        let event_sender = self.event_sender.clone();
+        let event_sender = self.event_sender.lock().await.clone();
         let nickname = self.config.nickname.clone();
         let server_password = self.config.server_password.clone();
         let _nickserv_password = self.config.nickserv_password.clone();
@@ -805,8 +805,9 @@ impl Channel for IRCChannel {
         self.send_privmsg(channel_id, &message.content).await
     }
 
-    async fn start_listener(&self, _event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
-        // Listener is started in connect()
+    async fn start_listener(&self, event_bus: mpsc::Sender<ChannelEvent>) -> Result<()> {
+        // P1 FIX: Save event_bus so connect() can use it to emit events
+        *self.event_sender.lock().await = Some(event_bus);
         Ok(())
     }
 
