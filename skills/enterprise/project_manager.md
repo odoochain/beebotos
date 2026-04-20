@@ -1,4 +1,4 @@
-# Skill: Project Manager
+# Project Manager
 
 ## Description
 

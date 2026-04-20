@@ -437,7 +437,7 @@ mod tests {
     async fn test_parallel_recovery() {
         let agent_ids: Vec<String> = (0..10).map(|i| format!("agent-{}", i)).collect();
         
-        let recover_fn = |id: String| async move {
+        let recover_fn = |_id: String| async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             Ok(true)
         };

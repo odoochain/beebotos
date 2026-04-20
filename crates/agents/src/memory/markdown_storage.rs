@@ -334,39 +334,22 @@ impl MarkdownStorage {
 
     /// Initialize default memory files with templates
     async fn initialize_default_files(&self) -> Result<()> {
-        // Core memory template
-        let core_path = self.config.workspace_dir.join(CORE_MEMORY_FILE);
-        if !core_path.exists() {
-            let template = self.core_memory_template();
-            self.write_file_atomic(&core_path, &template).await?;
-        }
-
-        // User profile template
-        let user_path = self.config.workspace_dir.join(USER_PROFILE_FILE);
-        if !user_path.exists() {
-            let template = self.user_profile_template();
-            self.write_file_atomic(&user_path, &template).await?;
-        }
-
-        // Soul template
-        let soul_path = self.config.workspace_dir.join(SOUL_FILE);
-        if !soul_path.exists() {
-            let template = self.soul_template();
-            self.write_file_atomic(&soul_path, &template).await?;
-        }
-
-        // Agents manual template
-        let agents_path = self.config.workspace_dir.join(AGENTS_MANUAL_FILE);
-        if !agents_path.exists() {
-            let template = self.agents_manual_template();
-            self.write_file_atomic(&agents_path, &template).await?;
-        }
-
-        // Heartbeat template
-        let heartbeat_path = self.config.workspace_dir.join(HEARTBEAT_FILE);
-        if !heartbeat_path.exists() {
-            let template = self.heartbeat_template();
-            self.write_file_atomic(&heartbeat_path, &template).await?;
+        let files = [
+            (CORE_MEMORY_FILE, self.core_memory_template()),
+            (USER_PROFILE_FILE, self.user_profile_template()),
+            (SOUL_FILE, self.soul_template()),
+            (AGENTS_MANUAL_FILE, self.agents_manual_template()),
+            (HEARTBEAT_FILE, self.heartbeat_template()),
+        ];
+        
+        for (filename, template) in files {
+            let path = self.config.workspace_dir.join(filename);
+            if !path.exists() {
+                info!("📝 Creating default memory file: {:?}", path);
+                self.write_file_atomic(&path, &template).await?;
+            } else {
+                info!("📂 Memory file exists: {:?}", path);
+            }
         }
 
         Ok(())

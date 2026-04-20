@@ -378,10 +378,10 @@ impl StatePersistence {
         .bind(&config.name)
         .bind(&config.description)
         .bind(&config.version)
-        .bind(capabilities_json)
-        .bind(model_config_json)
-        .bind(memory_config_json)
-        .bind(personality_config_json)
+        .bind(&capabilities_json)
+        .bind(&model_config_json)
+        .bind(&memory_config_json)
+        .bind(&personality_config_json)
         .bind(config.created_at)
         .bind(config.updated_at)
         .execute(db)
@@ -391,7 +391,82 @@ impl StatePersistence {
             AgentError::Database(e.to_string())
         })?;
 
-        info!("Agent config saved for {}", config.agent_id);
+        // 🔧 FIX: Also ensure the agent exists in the `agents` table to satisfy FK constraints
+        // (e.g. agent_channel_bindings.agent_id REFERENCES agents(id))
+        let model_provider = config.model_config.provider.clone();
+        let model_name = config.model_config.model.clone();
+        sqlx::query(
+            r#"
+            INSERT INTO agents (
+                id, name, description, status, capabilities,
+                model_provider, model_name, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT (id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                status = excluded.status,
+                capabilities = excluded.capabilities,
+                model_provider = excluded.model_provider,
+                model_name = excluded.model_name,
+                updated_at = excluded.updated_at
+            "#
+        )
+        .bind(&config.agent_id)
+        .bind(&config.name)
+        .bind(&config.description)
+        .bind(&capabilities_json)
+        .bind(&model_provider)
+        .bind(&model_name)
+        .bind(config.created_at)
+        .bind(config.updated_at)
+        .execute(db)
+        .await
+        .map_err(|e| {
+            error!("Failed to save agent to agents table: {}", e);
+            AgentError::Database(e.to_string())
+        })?;
+
+        info!("Agent config and agents table record saved for {}", config.agent_id);
+        Ok(())
+    }
+
+    /// 🔧 FIX: Fast-sync only the agents table (used during recovery to satisfy FK constraints
+    /// without the overhead of full save_config which updates agent_configs too).
+    pub async fn sync_agents_table(&self, config: &PersistedAgentConfig) -> Result<(), AgentError> {
+        let db = match &self.db {
+            Some(db) => db,
+            None => return Ok(()),
+        };
+
+        let capabilities_json = serde_json::to_string(&config.capabilities)
+            .map_err(|e| AgentError::Serialization(e.to_string()))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO agents (id, name, description, status, capabilities, model_provider, model_name, created_at, updated_at)
+            VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                status = excluded.status,
+                capabilities = excluded.capabilities,
+                model_provider = excluded.model_provider,
+                model_name = excluded.model_name,
+                updated_at = excluded.updated_at
+            "#
+        )
+        .bind(&config.agent_id)
+        .bind(&config.name)
+        .bind(&config.description)
+        .bind(&capabilities_json)
+        .bind(&config.model_config.provider)
+        .bind(&config.model_config.model)
+        .bind(config.created_at)
+        .bind(config.updated_at)
+        .execute(db)
+        .await
+        .map_err(|e| AgentError::Database(e.to_string()))?;
+
         Ok(())
     }
 

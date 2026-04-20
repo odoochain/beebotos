@@ -1,4 +1,4 @@
-# Skill: Game Economy Optimizer
+# Game Economy Optimizer
 
 ## Description
 

@@ -1,4 +1,4 @@
-# Skill: Security Auditor
+# Security Auditor
 
 ## Description
 

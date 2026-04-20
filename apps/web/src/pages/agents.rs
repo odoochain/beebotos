@@ -1,4 +1,4 @@
-use crate::api::{AgentInfo, AgentStatus, ApiClient, CreateAgentRequest};
+use crate::api::{AgentInfo, AgentStatus, CreateAgentRequest};
 use crate::components::{ErrorContext, Pagination, PaginationState, SkeletonGrid};
 use crate::state::use_app_state;
 use crate::utils::{FormValidator, StringValidators};
@@ -30,19 +30,20 @@ pub fn AgentsPage() -> impl IntoView {
         is_loading.set(true);
         agents_error.set(None);
         let app_state = app_state_stored.get_value();
-        let client = app_state.api_client();
         let page = pagination.get().current_page;
         let pag = pagination;
 
         spawn_local(async move {
-            match fetch_agents_paginated(&client, page, PAGE_SIZE).await {
-                Ok((data, total)) => {
+            let service = app_state.agent_service();
+            match service.list_paginated(page, PAGE_SIZE).await {
+                Ok(resp) => {
+                    let total = resp.total as usize;
                     pag.update(|p| p.set_total(total));
-                    agents_data.set(Some((data, total)));
+                    agents_data.set(Some((resp.data, total)));
                     is_loading.set(false);
                 }
                 Err(e) => {
-                    agents_error.set(Some(e));
+                    agents_error.set(Some(format!("Failed to load agents: {}", e)));
                     is_loading.set(false);
                 }
             }
@@ -139,40 +140,7 @@ pub fn AgentsPage() -> impl IntoView {
     }
 }
 
-async fn fetch_agents_paginated(
-    _client: &ApiClient,
-    _page: usize,
-    _page_size: usize,
-) -> Result<(Vec<AgentInfo>, usize), String> {
-    gloo_timers::future::TimeoutFuture::new(300).await;
 
-    let all_agents = vec![
-        AgentInfo {
-            id: "agent-1".to_string(),
-            name: "Trading Bot".to_string(),
-            description: Some("Automated trading agent".to_string()),
-            status: AgentStatus::Running,
-            capabilities: vec!["trading".to_string(), "analysis".to_string()],
-            created_at: Some("2024-01-15T10:00:00Z".to_string()),
-            updated_at: Some("2024-03-22T15:30:00Z".to_string()),
-            task_count: Some(1250),
-            uptime_percent: Some(99.8),
-        },
-        AgentInfo {
-            id: "agent-2".to_string(),
-            name: "Data Processor".to_string(),
-            description: Some("ETL pipeline automation".to_string()),
-            status: AgentStatus::Idle,
-            capabilities: vec!["data".to_string(), "transform".to_string()],
-            created_at: Some("2024-02-01T08:00:00Z".to_string()),
-            updated_at: Some("2024-03-21T10:15:00Z".to_string()),
-            task_count: Some(3420),
-            uptime_percent: Some(99.5),
-        },
-    ];
-
-    Ok((all_agents.clone(), all_agents.len()))
-}
 
 #[component]
 fn AgentsList(
@@ -401,6 +369,8 @@ fn CreateAgentModal(
     let app_state = use_app_state();
     let name = RwSignal::new(String::new());
     let description = RwSignal::new(String::new());
+    let model_provider = RwSignal::new(String::from("openai"));
+    let model_name = RwSignal::new(String::from("gpt-4"));
     let validator = RwSignal::new(FormValidator::new());
     let is_submitting = RwSignal::new(false);
 
@@ -436,6 +406,8 @@ fn CreateAgentModal(
                                 name: name.get(),
                                 description: Some(description.get()).filter(|s| !s.is_empty()),
                                 capabilities: vec![],
+                                model_provider: Some(model_provider.get()).filter(|s| !s.is_empty()),
+                                model_name: Some(model_name.get()).filter(|s| !s.is_empty()),
                             };
                             let on_created = on_created.clone();
                             let on_close = on_close.clone();
@@ -475,6 +447,31 @@ fn CreateAgentModal(
                             prop:value=description
                             on:input=move |e| description.set(event_target_value(&e))
                             rows="3"
+                        />
+                    </div>
+
+                    <div class="form-group">
+                        <label>"Model Provider"</label>
+                        <select
+                            prop:value=model_provider
+                            on:change=move |e| model_provider.set(event_target_value(&e))
+                        >
+                            <option value="openai">"OpenAI"</option>
+                            <option value="anthropic">"Anthropic"</option>
+                            <option value="kimi">"Kimi"</option>
+                            <option value="deepseek">"DeepSeek"</option>
+                            <option value="zhipu">"Zhipu"</option>
+                            <option value="ollama">"Ollama"</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>"Model Name"</label>
+                        <input
+                            type="text"
+                            placeholder="e.g. gpt-4, claude-3-opus-20240229"
+                            prop:value=model_name
+                            on:input=move |e| model_name.set(event_target_value(&e))
                         />
                     </div>
 

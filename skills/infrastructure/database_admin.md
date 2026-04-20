@@ -1,4 +1,4 @@
-# Skill: Database Administrator
+# Database Administrator
 
 ## Description
 

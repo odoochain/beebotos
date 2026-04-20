@@ -1,4 +1,4 @@
-# Skill: Game AI Player
+# Game AI Player
 
 ## Description
 

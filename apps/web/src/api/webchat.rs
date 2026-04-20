@@ -88,7 +88,7 @@ impl WebchatApiService {
     }
 
     /// 归档会话
-    pub async fn archive_session(&self, id: &str) -> Result<(), ApiError> {
+    pub async fn archive_session(&self, id: &str) -> Result<serde_json::Value, ApiError> {
         self.client
             .post(&format!("/webchat/sessions/{}/archive", id), &serde_json::json!({}))
             .await
@@ -146,7 +146,7 @@ impl WebchatApiService {
         };
 
         self.client
-            .put(&format!("/webchat/sessions/{}", id), &request)
+            .put(&format!("/webchat/sessions/{}/title", id), &request)
             .await
     }
 

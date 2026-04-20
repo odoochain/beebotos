@@ -292,6 +292,7 @@ impl PersonalWeChatChannel {
     }
 
     /// Clear persisted session
+    #[allow(dead_code)]
     async fn clear_session(&self) {
         let _ = tokio::fs::remove_file(&self.session_store_path).await;
     }

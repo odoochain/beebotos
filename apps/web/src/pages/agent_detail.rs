@@ -1,4 +1,4 @@
-use crate::api::{AgentInfo, AgentStatus};
+use crate::api::{AgentInfo, AgentLogEntry, AgentStatus, UpdateAgentRequest};
 use crate::state::use_app_state;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -6,6 +6,8 @@ use leptos::view;
 use leptos_meta::*;
 use leptos_router::components::A;
 use leptos_router::hooks::use_params_map;
+use leptos_router::hooks::use_navigate;
+use wasm_bindgen::JsCast;
 
 #[component]
 pub fn AgentDetail() -> impl IntoView {
@@ -16,7 +18,41 @@ pub fn AgentDetail() -> impl IntoView {
     let agent_id = move || params.with(|p| p.get("id").unwrap_or_default());
 
     let agent_data: RwSignal<Option<AgentInfo>> = RwSignal::new(None);
-    let agent_error: RwSignal<Option<String>> = RwSignal::new(None);
+    let agent_error = RwSignal::new(None::<String>);
+    let edit_open = RwSignal::new(false);
+    let delete_confirm_open = RwSignal::new(false);
+    let logs_open = RwSignal::new(false);
+    let action_error = RwSignal::new(None::<String>);
+
+    // Logs state
+    let logs_data: RwSignal<Vec<AgentLogEntry>> = RwSignal::new(Vec::new());
+    let logs_loading = RwSignal::new(false);
+    let logs_error = RwSignal::new(None::<String>);
+
+    let fetch_logs = move |id: String| {
+        logs_loading.set(true);
+        logs_error.set(None);
+        let app_state = app_state_stored.get_value();
+        spawn_local(async move {
+            let service = app_state.agent_service();
+            match service.get_logs(&id).await {
+                Ok(data) => logs_data.set(data),
+                Err(e) => logs_error.set(Some(e.to_string())),
+            }
+            logs_loading.set(false);
+        });
+    };
+    let fetch_logs_stored = StoredValue::new(fetch_logs);
+
+    // Auto-fetch logs when modal opens
+    Effect::new(move |_| {
+        if logs_open.get() {
+            let id = agent_id();
+            if !id.is_empty() {
+                fetch_logs_stored.get_value()(id);
+            }
+        }
+    });
 
     // Fetch agent details
     let fetch_agent = move || {
@@ -41,6 +77,19 @@ pub fn AgentDetail() -> impl IntoView {
     // Initial fetch
     fetch_agent_stored.get_value()();
 
+    // Edit modal state
+    let edit_name = RwSignal::new(String::new());
+    let edit_description = RwSignal::new(String::new());
+    let edit_saving = RwSignal::new(false);
+    let edit_error = RwSignal::new(None::<String>);
+
+    Effect::new(move |_| {
+        if let Some(a) = agent_data.get() {
+            edit_name.set(a.name);
+            edit_description.set(a.description.unwrap_or_default());
+        }
+    });
+
     view! {
         <Title text="Agent Details - BeeBotOS" />
         <div class="page agent-detail-page">
@@ -50,6 +99,9 @@ pub fn AgentDetail() -> impl IntoView {
                 } else if let Some(agent) = agent_data.get() {
                     let agent_id_start = agent.id.clone();
                     let agent_id_stop = agent.id.clone();
+                    let agent_id_edit = agent.id.clone();
+                    let agent_id_delete = agent.id.clone();
+                    let agent_name_delete = agent.name.clone();
                     view! {
                         <AgentDetailView
                             agent=agent
@@ -75,12 +127,204 @@ pub fn AgentDetail() -> impl IntoView {
                                     });
                                 }
                             }
+                            on_edit={
+                                move || {
+                                    edit_open.set(true);
+                                }
+                            }
+                            on_delete={
+                                move || {
+                                    delete_confirm_open.set(true);
+                                }
+                            }
+                            on_view_logs={
+                                move || {
+                                    logs_open.set(true);
+                                }
+                            }
                         />
+
+                        // Edit Modal
+                        {move || if edit_open.get() {
+                            view! {
+                                <div class="modal-overlay" on:click=move |_| edit_open.set(false)>
+                                    <div class="modal" on:click=move |e| e.stop_propagation()>
+                                        <div class="modal-header">
+                                            <h3>"Edit Agent"</h3>
+                                            <button class="close-btn" on:click=move |_| edit_open.set(false)>"✕"</button>
+                                        </div>
+                                        <div class="modal-body">
+                                            {move || edit_error.get().map(|msg| view! {
+                                                <div class="alert alert-error">{msg}</div>
+                                            })}
+                                            <div class="form-group">
+                                                <label>"Name"</label>
+                                                <input
+                                                    type="text"
+                                                    prop:value=edit_name
+                                                    on:input=move |e| edit_name.set(event_target_value(&e))
+                                                />
+                                            </div>
+                                            <div class="form-group">
+                                                <label>"Description"</label>
+                                                <textarea
+                                                    prop:value=edit_description
+                                                    on:input=move |e| edit_description.set(event_target_value(&e))
+                                                />
+                                            </div>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button class="btn btn-secondary" on:click=move |_| edit_open.set(false)>
+                                                "Cancel"
+                                            </button>
+                                            <button
+                                                class="btn btn-primary"
+                                                on:click={
+                                                    let id = agent_id_edit.clone();
+                                                    move |_| {
+                                                        let req = UpdateAgentRequest {
+                                                            name: Some(edit_name.get()).filter(|s| !s.is_empty()),
+                                                            description: Some(edit_description.get()).filter(|s| !s.is_empty()),
+                                                            status: None,
+                                                            capabilities: None,
+                                                            model_provider: None,
+                                                            model_name: None,
+                                                        };
+                                                        edit_saving.set(true);
+                                                        edit_error.set(None);
+                                                        let app_state = app_state_stored.get_value();
+                                                        let id = id.clone();
+                                                        spawn_local(async move {
+                                                            let service = app_state.agent_service();
+                                                            match service.update(&id, req).await {
+                                                                Ok(_) => {
+                                                                    edit_saving.set(false);
+                                                                    edit_open.set(false);
+                                                                    fetch_agent_stored.get_value()();
+                                                                }
+                                                                Err(e) => {
+                                                                    edit_saving.set(false);
+                                                                    edit_error.set(Some(format!("Update failed: {}", e)));
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                disabled=edit_saving
+                                            >
+                                                {move || if edit_saving.get() { "Saving..." } else { "Save" }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }}
+
+                        // Logs Modal
+                        {move || if logs_open.get() {
+                            view! {
+                                <div class="modal-overlay" on:click=move |_| logs_open.set(false)>
+                                    <div class="modal" on:click=move |e| e.stop_propagation()>
+                                        <div class="modal-header">
+                                            <h3>"Agent Logs"</h3>
+                                            <button class="close-btn" on:click=move |_| logs_open.set(false)>"✕"</button>
+                                        </div>
+                                        <div class="modal-body">
+                                            {move || if logs_loading.get() {
+                                                view! { <p>"Loading logs..."</p> }.into_any()
+                                            } else if let Some(err) = logs_error.get() {
+                                                view! { <div class="alert alert-error">{err}</div> }.into_any()
+                                            } else {
+                                                let logs = logs_data.get();
+                                                if logs.is_empty() {
+                                                    view! { <p class="text-muted">"No logs available"</p> }.into_any()
+                                                } else {
+                                                    view! {
+                                                        <div class="log-list">
+                                                            {logs.into_iter().map(|log| {
+                                                                let level_class = match log.level.as_str() {
+                                                                    "error" => "log-error",
+                                                                    "warn" => "log-warn",
+                                                                    _ => "log-info",
+                                                                };
+                                                                view! {
+                                                                    <div class="log-entry">
+                                                                        <span class=format!("log-level {}", level_class)>{log.level.to_uppercase()}</span>
+                                                                        <span class="log-time">{log.timestamp}</span>
+                                                                        <span class="log-message">{log.message}</span>
+                                                                    </div>
+                                                                }
+                                                            }).collect::<Vec<_>>()}
+                                                        </div>
+                                                    }.into_any()
+                                                }
+                                            }}
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }}
+
+                        // Delete Confirm Modal
+                        {move || if delete_confirm_open.get() {
+                            view! {
+                                <div class="modal-overlay" on:click=move |_| delete_confirm_open.set(false)>
+                                    <div class="modal modal-sm" on:click=move |e| e.stop_propagation()>
+                                        <div class="modal-header">
+                                            <h3>"Delete Agent"</h3>
+                                            <button class="close-btn" on:click=move |_| delete_confirm_open.set(false)>"✕"</button>
+                                        </div>
+                                        <div class="modal-body">
+                                            <p>{format!("Are you sure you want to delete '{}'? This action cannot be undone.", agent_name_delete)}</p>
+                                        </div>
+                                        <div class="modal-footer">
+                                            <button class="btn btn-secondary" on:click=move |_| delete_confirm_open.set(false)>
+                                                "Cancel"
+                                            </button>
+                                            <button
+                                                class="btn btn-danger"
+                                                on:click={
+                                                    let id = agent_id_delete.clone();
+                                                    move |_| {
+                                                        let app_state = app_state_stored.get_value();
+                                                        let id = id.clone();
+                                                        let navigate = use_navigate();
+                                                        spawn_local(async move {
+                                                            let service = app_state.agent_service();
+                                                            match service.delete(&id).await {
+                                                                Ok(_) => {
+                                                                    delete_confirm_open.set(false);
+                                                                    navigate("/agents", Default::default());
+                                                                }
+                                                                Err(e) => {
+                                                                    action_error.set(Some(format!("Delete failed: {}", e)));
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            >
+                                                "Delete"
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }}
                     }.into_any()
                 } else {
                     view! { <AgentDetailLoading/> }.into_any()
                 }
             }}
+            {move || action_error.get().map(|msg| view! {
+                <div class="alert alert-error">{msg}</div>
+            })}
         </div>
     }
 }
@@ -90,6 +334,9 @@ fn AgentDetailView(
     #[prop(into)] agent: AgentInfo,
     on_start: impl Fn() + Clone + 'static,
     on_stop: impl Fn() + Clone + 'static,
+    on_edit: impl Fn() + Clone + 'static,
+    on_delete: impl Fn() + Clone + 'static,
+    on_view_logs: impl Fn() + Clone + 'static,
 ) -> impl IntoView {
     let status_class = match agent.status {
         AgentStatus::Running => "status-running",
@@ -103,6 +350,9 @@ fn AgentDetailView(
     // Use Rc<RefCell> for callbacks (not Send/Sync but works in single-threaded WASM)
     let on_start = std::rc::Rc::new(std::cell::RefCell::new(on_start));
     let on_stop = std::rc::Rc::new(std::cell::RefCell::new(on_stop));
+    let on_edit = std::rc::Rc::new(std::cell::RefCell::new(on_edit));
+    let on_delete = std::rc::Rc::new(std::cell::RefCell::new(on_delete));
+    let on_view_logs = std::rc::Rc::new(std::cell::RefCell::new(on_view_logs));
 
     view! {
         <div class="agent-detail-header">
@@ -134,8 +384,12 @@ fn AgentDetailView(
                             </button>
                         }.into_any()
                     }}
-                    <button class="btn btn-secondary">"Edit"</button>
-                    <button class="btn btn-danger">"Delete"</button>
+                    <button class="btn btn-secondary" on:click=move |_| on_edit.borrow_mut()()>
+                        "Edit"
+                    </button>
+                    <button class="btn btn-danger" on:click=move |_| on_delete.borrow_mut()()>
+                        "Delete"
+                    </button>
                 </div>
             </div>
         </div>
@@ -210,7 +464,12 @@ fn AgentDetailView(
                 <section class="card">
                     <h3>"Actions"</h3>
                     <div class="action-list">
-                        <button class="btn btn-secondary btn-block">"View Logs"</button>
+                        <button
+                            class="btn btn-secondary btn-block"
+                            on:click=move |_| on_view_logs.borrow_mut()()
+                        >
+                            "View Logs"
+                        </button>
                         <button class="btn btn-secondary btn-block">"Configure"</button>
                         <button class="btn btn-secondary btn-block">"Clone Agent"</button>
                         <button class="btn btn-secondary btn-block">"Export Config"</button>
@@ -292,4 +551,11 @@ fn AgentActivityLog() -> impl IntoView {
             </div>
         </div>
     }
+}
+
+fn event_target_value(ev: &leptos::ev::Event) -> String {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value())
+        .unwrap_or_default()
 }

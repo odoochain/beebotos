@@ -42,6 +42,22 @@ impl UserChannelStore for SqliteUserChannelStore {
         binding: &UserChannelBinding,
         config_encrypted: &str,
     ) -> Result<()> {
+        // 🟢 P1 FIX: Auto-create placeholder user record to satisfy FOREIGN KEY constraint.
+        // External platform users (WeChat, Telegram, etc.) won't exist in the users table,
+        // so we upsert a minimal placeholder before inserting the user_channel binding.
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO users (id, username, email, password_hash, roles, permissions)
+            VALUES (?1, ?2, ?3, 'no_password', 'member', 'agentRead,agentCreate,daoVote,settingsRead')
+            "#,
+        )
+        .bind(&binding.user_id)
+        .bind(&binding.user_id)
+        .bind(format!("{}@placeholder.local", binding.user_id))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AgentError::Database(format!("Failed to upsert placeholder user: {}", e)))?;
+
         let status = Self::status_to_string(binding.status);
         sqlx::query(
             r#"

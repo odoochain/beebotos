@@ -13,8 +13,35 @@ use crate::state::{
 /// 浏览器自动化页面
 #[component]
 pub fn BrowserPage() -> impl IntoView {
-    let _browser_state = use_browser_state();
+    let browser_state = use_browser_state();
     let _ui_state = use_browser_ui_state();
+
+    // Load profiles from API on mount
+    let client = crate::api::create_client();
+    let browser_service = crate::api::BrowserApiService::new(client);
+    let service_stored = leptos::prelude::StoredValue::new(browser_service);
+
+    leptos::task::spawn_local(async move {
+        let service = service_stored.get_value();
+        match service.list_profiles().await {
+            Ok(profiles) => browser_state.profiles.set(profiles),
+            Err(e) => browser_state.error.set(Some(crate::browser::BrowserError {
+                error_type: crate::browser::BrowserErrorType::ConnectionLost,
+                message: e.to_string(),
+                current_url: None,
+                screenshot_path: None,
+                suggestions: vec![],
+            })),
+        }
+        match service.get_status().await {
+            Ok(status) => {
+                browser_state.connection_status.set(
+                    if status.active_instances > 0 { crate::browser::ConnectionStatus::Connected } else { crate::browser::ConnectionStatus::Disconnected }
+                );
+            }
+            Err(_) => {}
+        }
+    });
 
     view! {
         <Title text="Browser Automation - BeeBotOS" />

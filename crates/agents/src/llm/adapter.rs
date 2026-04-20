@@ -23,6 +23,7 @@ impl LLMClientAdapter {
     }
 
     /// Convert communication message to LLM message
+    #[allow(dead_code)]
     fn convert_message(msg: CommMessage) -> LLMMessage {
         let role = match msg.platform {
             crate::communication::PlatformType::Custom => Role::System,
@@ -48,7 +49,7 @@ impl LLMCallInterface for LLMClientAdapter {
     async fn call_llm(
         &self,
         messages: Vec<CommMessage>,
-        _context: Option<HashMap<String, String>>,
+        context: Option<HashMap<String, String>>,
     ) -> AgentResult<String> {
         // Build a combined prompt from all messages to preserve context.
         let prompt = messages
@@ -57,9 +58,21 @@ impl LLMCallInterface for LLMClientAdapter {
             .collect::<Vec<_>>()
             .join("\n\n");
 
-        // Execute chat with the full context
-        let response = self.client.chat(&prompt).await
-            .map_err(|e| crate::error::AgentError::Execution(e.to_string()))?;
+        // 🟢 P2 FIX: Support dynamic max_tokens from context
+        let response = if let Some(ref ctx) = context {
+            if let Some(max_tokens_str) = ctx.get("max_tokens") {
+                if let Ok(max_tokens) = max_tokens_str.parse::<u32>() {
+                    self.client.chat_with_max_tokens(&prompt, max_tokens).await
+                } else {
+                    self.client.chat(&prompt).await
+                }
+            } else {
+                self.client.chat(&prompt).await
+            }
+        } else {
+            self.client.chat(&prompt).await
+        }
+        .map_err(|e| crate::error::AgentError::Execution(e.to_string()))?;
 
         Ok(response)
     }

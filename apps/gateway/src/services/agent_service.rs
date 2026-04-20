@@ -124,6 +124,9 @@ impl AgentService {
         self.record_status_change(agent_id, "initializing", "Kernel sandbox created")
             .await?;
 
+        // Step 7: Log creation
+        self.add_log(&agent_id.to_string(), "info", "Agent created and spawned in kernel sandbox", Some("lifecycle")).await.ok();
+
         info!(
             "Agent {} created and spawned in kernel sandbox (task_id: {})",
             agent_id, task_id
@@ -181,6 +184,9 @@ impl AgentService {
         self.record_status_change(agent_uuid, "running", "User initiated start")
             .await?;
 
+        // Step 7: Log start
+        self.add_log(agent_id, "info", "Agent started", Some("lifecycle")).await.ok();
+
         info!(
             "Agent {} started successfully (task_id: {})",
             agent_id, task_id
@@ -230,6 +236,9 @@ impl AgentService {
         self.record_status_change(uuid, "stopped", "User initiated stop")
             .await?;
 
+        // Step 5: Log stop
+        self.add_log(agent_id, "info", "Agent stopped", Some("lifecycle")).await.ok();
+
         info!("Agent {} stopped successfully", agent_id);
         Ok(())
     }
@@ -276,6 +285,9 @@ impl AgentService {
         if result.rows_affected() == 0 {
             return Err(AppError::not_found("Agent", agent_id));
         }
+
+        // Step 4: Log deletion
+        self.add_log(agent_id, "info", "Agent deleted", Some("lifecycle")).await.ok();
 
         info!("Agent {} deleted", agent_id);
         Ok(())
@@ -635,6 +647,106 @@ impl AgentService {
             })?;
 
         debug!("Agent {} status updated to {}", agent_id, status);
+        Ok(())
+    }
+
+    /// Update agent fields (name, description, capabilities, model_provider, model_name)
+    pub async fn update_agent(
+        &self,
+        agent_id: &str,
+        request: &crate::models::UpdateAgentRequest,
+    ) -> Result<AgentRecord, AppError> {
+        info!("Updating agent {}", agent_id);
+
+        // Build dynamic query parts
+        let mut set_parts = Vec::new();
+        let mut binds: Vec<String> = Vec::new();
+
+        if let Some(name) = &request.name {
+            set_parts.push("name = ?".to_string());
+            binds.push(name.clone());
+        }
+        if let Some(description) = &request.description {
+            set_parts.push("description = ?".to_string());
+            binds.push(description.clone());
+        }
+        if let Some(status) = &request.status {
+            set_parts.push("status = ?".to_string());
+            binds.push(status.clone());
+        }
+        if let Some(caps) = &request.capabilities {
+            let caps_json = serde_json::to_string(caps)
+                .map_err(|e| AppError::Internal(format!("Failed to serialize capabilities: {}", e)))?;
+            set_parts.push("capabilities = ?".to_string());
+            binds.push(caps_json);
+        }
+        if let Some(provider) = &request.model_provider {
+            set_parts.push("model_provider = ?".to_string());
+            binds.push(provider.clone());
+        }
+        if let Some(model) = &request.model_name {
+            set_parts.push("model_name = ?".to_string());
+            binds.push(model.clone());
+        }
+
+        if set_parts.is_empty() {
+            return self.get_agent(agent_id).await?
+                .ok_or_else(|| AppError::not_found("Agent", agent_id));
+        }
+
+        set_parts.push("updated_at = datetime('now')".to_string());
+
+        // Build the full SQL. SQLite doesn't support bind positions in column names,
+        // but all our binds are VALUES so positional ? works fine.
+        let sql = format!(
+            "UPDATE agents SET {} WHERE id = ?{}",
+            set_parts.join(", "),
+            binds.len() + 1
+        );
+
+        let mut query = sqlx::query(&sql);
+        for val in &binds {
+            query = query.bind(val);
+        }
+        query = query.bind(agent_id.to_string());
+
+        query.execute(&self.db).await.map_err(|e| {
+            error!("Failed to update agent: {}", e);
+            AppError::database(e)
+        })?;
+
+        info!("Agent {} updated", agent_id);
+
+        // Log update
+        self.add_log(agent_id, "info", "Agent configuration updated", Some("lifecycle")).await.ok();
+
+        // Return updated record
+        self.get_agent(agent_id).await?
+            .ok_or_else(|| AppError::not_found("Agent", agent_id))
+    }
+
+    /// Add a log entry for an agent
+    pub async fn add_log(
+        &self,
+        agent_id: &str,
+        level: &str,
+        message: &str,
+        source: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "INSERT INTO agent_logs (agent_id, level, message, source, timestamp)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))"
+        )
+        .bind(agent_id)
+        .bind(level)
+        .bind(message)
+        .bind(source)
+        .execute(&self.db)
+        .await
+        .map_err(|e| {
+            error!("Failed to add agent log: {}", e);
+            AppError::database(e)
+        })?;
         Ok(())
     }
 }

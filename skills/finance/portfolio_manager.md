@@ -1,4 +1,4 @@
-# Skill: Portfolio Manager
+# Portfolio Manager
 
 ## Description
 

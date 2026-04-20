@@ -41,7 +41,7 @@ impl DecompositionContext {
             capabilities: Vec::new(),
             patterns: Vec::new(),
             constraints: Vec::new(),
-            max_depth: 5,
+            max_depth: 2,  // 🆕 FIX: Reduced from 5 to prevent exponential step explosion
             metadata: HashMap::new(),
         }
     }
@@ -103,8 +103,19 @@ impl HierarchicalDecomposer {
             )]);
         }
 
-        // Pattern-based decomposition
-        let steps = self.identify_subgoals(goal, context);
+
+
+        // 🔧 FIX: Only perform pattern-based decomposition at depth 0 (original user query).
+        // Sub-steps generated from decomposition should NOT be recursively decomposed
+        // to avoid exponential plan explosion (e.g. "plan" keyword matching sub-step descriptions).
+        let steps = if depth == 0 {
+            self.identify_subgoals(goal, context)
+        } else {
+            Vec::new()
+        };
+
+        // 🆕 FIX: Hard cap at 6 subgoals to prevent LLM call explosion
+        let steps: Vec<PlanStep> = steps.into_iter().take(6).collect();
 
         if steps.is_empty() {
             // Leaf task - cannot decompose further
@@ -113,7 +124,7 @@ impl HierarchicalDecomposer {
                 goal.to_string(),
             )])
         } else {
-            // Recursively decompose each subgoal
+            // Recursively decompose each subgoal (only one level deep due to depth == 0 guard)
             let mut all_steps = Vec::new();
             for (i, subgoal) in steps.iter().enumerate() {
                 let sub_steps =
@@ -139,26 +150,44 @@ impl HierarchicalDecomposer {
         let mut steps = Vec::new();
         let goal_lower = goal.to_lowercase();
 
-        // Pattern matching for common goal types
-        if goal_lower.contains("analyze") && goal_lower.contains("report") {
+        // Pattern matching for common goal types (English + Chinese)
+        if goal_lower.contains("analyze") && goal_lower.contains("report")
+            || (goal_lower.contains("分析") && goal_lower.contains("报告"))
+        {
             steps.push(PlanStep::new("gather", "Gather required data"));
             steps.push(PlanStep::new("analyze", "Perform analysis"));
             steps.push(PlanStep::new("compile", "Compile findings"));
             steps.push(PlanStep::new("format", "Format report"));
-        } else if goal_lower.contains("implement") || goal_lower.contains("build") {
+        } else if goal_lower.contains("implement") || goal_lower.contains("build")
+            || goal_lower.contains("开发") || goal_lower.contains("实现") || goal_lower.contains("构建")
+        {
             steps.push(PlanStep::new("design", "Design solution"));
             steps.push(PlanStep::new("implement", "Implement solution"));
             steps.push(PlanStep::new("test", "Test implementation"));
             steps.push(PlanStep::new("deploy", "Deploy solution"));
-        } else if goal_lower.contains("research") || goal_lower.contains("investigate") {
+        } else if goal_lower.contains("research") || goal_lower.contains("investigate")
+            || goal_lower.contains("研究") || goal_lower.contains("调查") || goal_lower.contains("搜索")
+        {
             steps.push(PlanStep::new("search", "Search for information"));
             steps.push(PlanStep::new("evaluate", "Evaluate sources"));
             steps.push(PlanStep::new("synthesize", "Synthesize findings"));
-        } else if goal_lower.contains("compare") || goal_lower.contains("evaluate") {
+        } else if goal_lower.contains("compare") || goal_lower.contains("evaluate")
+            || goal_lower.contains("比较") || goal_lower.contains("评估") || goal_lower.contains("对比")
+        {
             steps.push(PlanStep::new("identify", "Identify options"));
             steps.push(PlanStep::new("criteria", "Define evaluation criteria"));
             steps.push(PlanStep::new("compare", "Compare options"));
             steps.push(PlanStep::new("recommend", "Make recommendation"));
+        } else if goal_lower.contains("计划") || goal_lower.contains("规划")
+            || goal_lower.contains("安排") || goal_lower.contains("步骤")
+            || goal_lower.contains("攻略") || goal_lower.contains("行程")
+            || goal_lower.contains("plan") || goal_lower.contains("schedule")
+            || goal_lower.contains("itinerary")
+        {
+            steps.push(PlanStep::new("gather_info", "Gather relevant information and constraints"));
+            steps.push(PlanStep::new("formulate", "Formulate detailed plan with timeline"));
+            steps.push(PlanStep::new("refine", "Refine and optimize the plan"));
+            steps.push(PlanStep::new("present", "Present the final plan with actionable steps"));
         }
 
         steps

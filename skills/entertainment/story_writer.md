@@ -1,4 +1,4 @@
-# Skill: Story Writer
+# Story Writer
 
 ## Description
 

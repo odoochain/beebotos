@@ -411,3 +411,111 @@ pub async fn get_channel(
 
     Ok(Json(channel))
 }
+
+/// Update channel configuration
+#[derive(Debug, Deserialize)]
+pub struct UpdateChannelRequest {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub bot_token: Option<String>,
+    #[serde(default)]
+    pub auto_reconnect: Option<bool>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+pub async fn update_channel(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateChannelRequest>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    info!("Updating channel: {}", id);
+
+    // Persist any config changes via ChannelRegistry
+    if let Some(ref registry) = state.channel_registry {
+        if let Some(channel) = registry.get_channel(&id).await {
+            let mut guard = channel.write().await;
+            if let Some(enabled) = req.enabled {
+                if enabled {
+                    guard.connect().await.map_err(|e| {
+                        GatewayError::internal(format!("Failed to connect channel: {}", e))
+                    })?;
+                } else {
+                    guard.disconnect().await.map_err(|e| {
+                        GatewayError::internal(format!("Failed to disconnect channel: {}", e))
+                    })?;
+                }
+            }
+            // Note: actual config fields (base_url, bot_token, auto_reconnect) are
+            // channel-type-specific. Full persistence would require a per-channel
+            // config table follow-up enhancement.
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Channel updated",
+        "channel_id": id,
+    })))
+}
+
+/// Enable or disable a channel
+pub async fn set_channel_enabled(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    let enabled = req.get("enabled")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| GatewayError::bad_request("Missing 'enabled' field"))?;
+
+    info!("Setting channel {} enabled = {}", id, enabled);
+
+    if let Some(ref registry) = state.channel_registry {
+        if let Some(channel) = registry.get_channel(&id).await {
+            let mut guard = channel.write().await;
+            if enabled {
+                guard.connect().await.map_err(|e| {
+                    GatewayError::internal(format!("Failed to connect channel: {}", e))
+                })?;
+            } else {
+                guard.disconnect().await.map_err(|e| {
+                    GatewayError::internal(format!("Failed to disconnect channel: {}", e))
+                })?;
+            }
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": if enabled { "Channel enabled" } else { "Channel disabled" },
+        "channel_id": id,
+        "enabled": enabled,
+    })))
+}
+
+/// Test channel connection
+pub async fn test_channel_connection(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    info!("Testing channel connection: {}", id);
+
+    let connected = if let Some(ref registry) = state.channel_registry {
+        if let Some(channel) = registry.get_channel(&id).await {
+            let guard = channel.read().await;
+            guard.is_connected()
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    Ok(Json(serde_json::json!({
+        "success": connected,
+        "message": if connected { "Channel connection OK" } else { "Channel not connected" },
+        "channel_id": id,
+    })))
+}

@@ -48,7 +48,6 @@
 //! # });
 //! ```
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use beebotos_kernel::capabilities::{CapabilityLevel, CapabilitySet};

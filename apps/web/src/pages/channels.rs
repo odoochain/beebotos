@@ -2,7 +2,8 @@
 //!
 //! Reference: /data/copaw-style-web channel management design
 
-use crate::api::{ChannelService, ChannelInfo, ChannelStatus, WeChatQrResponse, QrStatusResponse};
+use crate::api::{ChannelService, ChannelInfo, ChannelStatus, WeChatQrResponse, QrStatusResponse, ChannelConfig};
+use wasm_bindgen::JsCast;
 use crate::components::InlineLoading;
 use crate::i18n::I18nContext;
 use leptos::prelude::*;
@@ -69,6 +70,21 @@ pub fn ChannelsPage() -> impl IntoView {
     // Config panel open state
     let (config_panel_open, set_config_panel_open) = signal(false);
 
+    // Action feedback
+    let (action_message, set_action_message) = signal::<Option<String>>(None);
+    let (action_error, set_action_error) = signal::<Option<String>>(None);
+
+    // Config form state (bound to inputs)
+    let (base_url, set_base_url) = signal(String::new());
+    let (bot_token, set_bot_token) = signal(String::new());
+    let (auto_reconnect, set_auto_reconnect) = signal(true);
+
+    // Refresh channels list
+    let refresh_channels = move || {
+        channels.refetch();
+    };
+    let refresh_stored = StoredValue::new(refresh_channels);
+
     view! {
         <div class="channels-page">
             // Page Header
@@ -76,6 +92,13 @@ pub fn ChannelsPage() -> impl IntoView {
                 <h2>{move || i18n_stored.get_value().t("channels-title")}</h2>
                 <p>{move || i18n_stored.get_value().t("channels-subtitle")}</p>
             </div>
+
+            {move || action_message.get().map(|msg| view! {
+                <div class="alert alert-success">{msg}</div>
+            })}
+            {move || action_error.get().map(|msg| view! {
+                <div class="alert alert-error">{msg}</div>
+            })}
 
             // Channels Grid
             <Suspense fallback=|| view! { <InlineLoading /> }>
@@ -97,7 +120,19 @@ pub fn ChannelsPage() -> impl IntoView {
                                             class="channel-card"
                                             on:click=move |_| {
                                                 set_selected_channel.set(Some(channel_for_click.clone()));
+                                                // Initialize form from channel config
+                                                if let Some(ref cfg) = channel_for_click.config {
+                                                    set_base_url.set(cfg.base_url.clone().unwrap_or_default());
+                                                    set_bot_token.set(cfg.bot_token.clone().unwrap_or_default());
+                                                    set_auto_reconnect.set(cfg.auto_reconnect.unwrap_or(true));
+                                                } else {
+                                                    set_base_url.set(String::new());
+                                                    set_bot_token.set(String::new());
+                                                    set_auto_reconnect.set(true);
+                                                }
                                                 set_config_panel_open.set(true);
+                                                set_action_message.set(None);
+                                                set_action_error.set(None);
                                             }
                                         >
                                             <div class={format!("channel-icon {}", channel.id)}>
@@ -129,6 +164,10 @@ pub fn ChannelsPage() -> impl IntoView {
             {move || {
                 if config_panel_open.get() {
                     selected_channel.get().map(|channel| {
+                        let channel_id_enable = channel.id.clone();
+                        let channel_id_test = channel.id.clone();
+                        let channel_id_save = channel.id.clone();
+
                         view! {
                             <>
                                 // Overlay
@@ -168,6 +207,38 @@ pub fn ChannelsPage() -> impl IntoView {
                                             {channel.last_error.clone().map(|err| view! {
                                                 <div class="error-message">{err}</div>
                                             })}
+                                        </div>
+
+                                        // Enable/Disable toggle
+                                        <div class="config-section">
+                                            <div class="form-group checkbox-group">
+                                                <label class="checkbox-label">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={channel.enabled}
+                                                        on:change=move |e| {
+                                                            let enabled = event_target_checked(&e);
+                                                            let service = service_stored.get_value();
+                                                            let id = channel_id_enable.clone();
+                                                            let refresh = refresh_stored.get_value();
+                                                            spawn_local(async move {
+                                                                match service.set_enabled(&id, enabled).await {
+                                                                    Ok(_) => {
+                                                                        set_action_message.set(Some(
+                                                                            if enabled { "Channel enabled".to_string() } else { "Channel disabled".to_string() }
+                                                                        ));
+                                                                        refresh();
+                                                                    }
+                                                                    Err(err) => {
+                                                                        set_action_error.set(Some(format!("Failed to toggle: {}", err)));
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+                                                    />
+                                                    <span>{i18n_stored.get_value().t("config-enabled")}</span>
+                                                </label>
+                                            </div>
                                         </div>
 
                                         // WeChat QR Code Section
@@ -288,7 +359,8 @@ pub fn ChannelsPage() -> impl IntoView {
                                                 <input
                                                     type="text"
                                                     placeholder="https://ilinkai.weixin.qq.com"
-                                                    value={channel.config.as_ref().and_then(|c| c.base_url.clone()).unwrap_or_default()}
+                                                    prop:value=base_url
+                                                    on:input=move |e| set_base_url.set(event_target_value(&e))
                                                 />
                                             </div>
                                             <div class="form-group">
@@ -296,14 +368,16 @@ pub fn ChannelsPage() -> impl IntoView {
                                                 <input
                                                     type="password"
                                                     placeholder="••••••••"
-                                                    value={channel.config.as_ref().and_then(|c| c.bot_token.clone()).unwrap_or_default()}
+                                                    prop:value=bot_token
+                                                    on:input=move |e| set_bot_token.set(event_target_value(&e))
                                                 />
                                             </div>
                                             <div class="form-group">
                                                 <label class="checkbox-label">
                                                     <input
                                                         type="checkbox"
-                                                        checked={channel.config.as_ref().and_then(|c| c.auto_reconnect).unwrap_or(true)}
+                                                        checked=auto_reconnect
+                                                        on:change=move |e| set_auto_reconnect.set(event_target_checked(&e))
                                                     />
                                                     <span>{i18n_stored.get_value().t("config-auto-reconnect")}</span>
                                                 </label>
@@ -315,7 +389,22 @@ pub fn ChannelsPage() -> impl IntoView {
                                             <button
                                                 class="btn-secondary"
                                                 on:click=move |_| {
-                                                    // Test connection
+                                                    let service = service_stored.get_value();
+                                                    let id = channel_id_test.clone();
+                                                    spawn_local(async move {
+                                                        match service.test_connection(&id).await {
+                                                            Ok(resp) => {
+                                                                if resp.success {
+                                                                    set_action_message.set(Some("Connection test passed".to_string()));
+                                                                } else {
+                                                                    set_action_error.set(Some("Connection test failed".to_string()));
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                set_action_error.set(Some(format!("Test failed: {}", e)));
+                                                            }
+                                                        }
+                                                    });
                                                 }
                                             >
                                                 {i18n_stored.get_value().t("action-test")}
@@ -323,7 +412,32 @@ pub fn ChannelsPage() -> impl IntoView {
                                             <button
                                                 class="btn-primary"
                                                 on:click=move |_| {
-                                                    set_config_panel_open.set(false);
+                                                    let service = service_stored.get_value();
+                                                    let id = channel_id_save.clone();
+                                                    let cfg = ChannelConfig {
+                                                        base_url: Some(base_url.get()).filter(|s| !s.is_empty()),
+                                                        bot_token: Some(bot_token.get()).filter(|s| !s.is_empty()),
+                                                        auto_reconnect: Some(auto_reconnect.get()),
+                                                        bot_base_url: None,
+                                                        reconnect_interval_secs: None,
+                                                        webhook_url: None,
+                                                        api_key: None,
+                                                        api_secret: None,
+                                                        extra: None,
+                                                    };
+                                                    let refresh = refresh_stored.get_value();
+                                                    spawn_local(async move {
+                                                        match service.update(&id, cfg).await {
+                                                            Ok(_) => {
+                                                                set_action_message.set(Some("Configuration saved".to_string()));
+                                                                set_config_panel_open.set(false);
+                                                                refresh();
+                                                            }
+                                                            Err(e) => {
+                                                                set_action_error.set(Some(format!("Save failed: {}", e)));
+                                                            }
+                                                        }
+                                                    });
                                                 }
                                             >
                                                 {i18n_stored.get_value().t("action-save")}
@@ -340,4 +454,18 @@ pub fn ChannelsPage() -> impl IntoView {
             }}
         </div>
     }
+}
+
+fn event_target_value(ev: &leptos::ev::Event) -> String {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value())
+        .unwrap_or_default()
+}
+
+fn event_target_checked(ev: &leptos::ev::Event) -> bool {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.checked())
+        .unwrap_or(false)
 }

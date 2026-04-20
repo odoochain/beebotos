@@ -220,8 +220,8 @@ impl WebScraper {
     /// Extract text content from HTML
     fn extract_text_from_html(&self, html: &str) -> String {
         // Remove script and style tags
-        let script_regex = Regex::new(r"<script[^>]*>[\s\S]*?</script>").unwrap();
-        let style_regex = Regex::new(r"<style[^>]*>[\s\S]*?</style>").unwrap();
+        let script_regex = Regex::new(r"<script[^>]*>[\s\S]*?</script>").expect("static regex is valid");
+        let style_regex = Regex::new(r"<style[^>]*>[\s\S]*?</style>").expect("static regex is valid");
         
         let mut text = script_regex.replace_all(html, "").to_string();
         text = style_regex.replace_all(&text, "").to_string();
@@ -253,7 +253,7 @@ impl WebScraper {
     /// Convert HTML to plain text
     fn html_to_text(&self, html: &str) -> String {
         // Remove remaining HTML tags
-        let tag_regex = Regex::new(r"<[^>]+>").unwrap();
+        let tag_regex = Regex::new(r"<[^>]+>").expect("static regex is valid");
         let mut text = tag_regex.replace_all(html, " ").to_string();
 
         // Decode common HTML entities
@@ -266,7 +266,7 @@ impl WebScraper {
             .replace("&#39;", "'");
 
         // Normalize whitespace
-        let whitespace_regex = Regex::new(r"\s+").unwrap();
+        let whitespace_regex = Regex::new(r"\s+").expect("static regex is valid");
         text = whitespace_regex.replace_all(&text, " ").trim().to_string();
 
         text
@@ -302,11 +302,7 @@ impl WebScraper {
     }
 }
 
-impl Default for WebScraper {
-    fn default() -> Self {
-        Self::new().expect("Failed to create WebScraper")
-    }
-}
+
 
 /// Scraped content from web page
 #[derive(Debug, Clone)]

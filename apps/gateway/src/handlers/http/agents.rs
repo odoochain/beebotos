@@ -126,10 +126,7 @@ pub async fn create_agent(
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({
-            "agent": response,
-            "message": "Agent created successfully with kernel sandbox",
-        })),
+        Json(response),
     ))
 }
 
@@ -138,7 +135,7 @@ pub async fn get_agent(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, GatewayError> {
+) -> Result<Json<AgentResponse>, GatewayError> {
     let agent_id = uuid::Uuid::parse_str(&id)
         .map_err(|_| GatewayError::bad_request("Invalid agent ID format"))?;
 
@@ -190,12 +187,30 @@ pub async fn get_agent(
 
     let response = AgentResponse::from(agent);
 
-    Ok(Json(json!({
-        "agent": response,
-        "status_history": history,
-        "runtime_state": runtime_state,
-        "kernel_task_id": kernel_task_id,
-    })))
+    Ok(Json(response))
+}
+
+/// Update agent
+///
+/// Delegates to AgentService for database update.
+pub async fn update_agent(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<crate::models::UpdateAgentRequest>,
+) -> Result<Json<AgentResponse>, GatewayError> {
+    let agent = state
+        .agent_service
+        .get_agent(&id)
+        .await?
+        .ok_or_else(|| GatewayError::not_found("Agent", &id))?;
+
+    check_ownership(&user, &agent)?;
+
+    let updated = state.agent_service.update_agent(&id, &req).await?;
+    let response = AgentResponse::from(updated);
+
+    Ok(Json(response))
 }
 
 /// Delete agent

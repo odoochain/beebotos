@@ -3,7 +3,6 @@
 //! Unified Channel trait implementation for DingTalk (钉钉).
 //! Supports WebSocket mode (default), Webhook mode, and Polling mode.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;

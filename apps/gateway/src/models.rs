@@ -116,6 +116,10 @@ pub struct UpdateAgentRequest {
     pub status: Option<String>,
     #[serde(default)]
     pub capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
 }
 
 /// Agent response

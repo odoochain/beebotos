@@ -374,22 +374,29 @@ impl UnifiedMemorySystem {
 
         // Core memory
         if let Ok(entries) = self.storage.read_entries(MemoryFileType::Core, None).await {
+            info!("📖 Loaded {} entries from core memory (MEMORY.md)", entries.len());
             all_entries.extend(entries);
         }
 
         // User profile
         if let Ok(entries) = self.storage.read_entries(MemoryFileType::User, None).await {
+            info!("👤 Loaded {} entries from user profile (USER.md)", entries.len());
             all_entries.extend(entries);
         }
 
         // Recent daily logs (last 30 days)
         let today = chrono::Local::now().date_naive();
+        let mut daily_count = 0;
         for i in 0..30 {
             let date = today - chrono::Duration::days(i);
             if let Ok(entries) = self.storage.read_entries(MemoryFileType::Daily, Some(date)).await
             {
+                daily_count += entries.len();
                 all_entries.extend(entries);
             }
+        }
+        if daily_count > 0 {
+            info!("📅 Loaded {} entries from daily logs (last 30 days)", daily_count);
         }
 
         // Other memory types
@@ -399,12 +406,19 @@ impl UnifiedMemorySystem {
             MemoryFileType::Heartbeat,
         ] {
             if let Ok(entries) = self.storage.read_entries(file_type, None).await {
+                let name = match file_type {
+                    MemoryFileType::Soul => "SOUL.md",
+                    MemoryFileType::Agents => "AGENTS.md",
+                    MemoryFileType::Heartbeat => "HEARTBEAT.md",
+                    _ => "unknown",
+                };
+                info!("📖 Loaded {} entries from {} ({})", entries.len(), name, file_type.filename(None));
                 all_entries.extend(entries);
             }
         }
 
         let total_entries = all_entries.len();
-        info!("Found {} entries to index", total_entries);
+        info!("🔍 Found {} total entries to index across all memory files", total_entries);
 
         // Batch index all entries
         self.index_entries_batch(&all_entries, progress_callback)

@@ -1,4 +1,4 @@
-# Skill: Contract Reviewer
+# Contract Reviewer
 
 ## Description
 

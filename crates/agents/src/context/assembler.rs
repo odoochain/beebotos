@@ -547,7 +547,7 @@ impl Default for ContextAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::attachment::{AttachmentType, PlatformSource};
+
 
     fn create_test_message(role: MessageRole, content: &str, tokens: usize) -> ContextMessage {
         ContextMessage {

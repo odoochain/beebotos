@@ -150,6 +150,28 @@ impl WebchatService {
         Ok(session)
     }
 
+    /// Get a single session by ID, verifying ownership
+    pub async fn get_session(
+        &self,
+        session_id: &str,
+        user_id: &str,
+    ) -> Result<ChatSession, AppError> {
+        let row: ChatSessionRow = sqlx::query_as(
+            "SELECT * FROM chat_sessions WHERE id = ?1 AND user_id = ?2"
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => AppError::not_found("Session", session_id),
+            _ => AppError::database(e),
+        })?;
+
+        row.try_into()
+            .map_err(|e: String| AppError::Internal(format!("Failed to parse session: {}", e)))
+    }
+
     /// List sessions for a user, ordered by updated_at desc
     pub async fn list_sessions(&self, user_id: &str) -> Result<Vec<ChatSession>, AppError> {
         let rows: Vec<ChatSessionRow> = sqlx::query_as(
@@ -253,7 +275,7 @@ impl WebchatService {
         session_id: &str,
         user_id: &str,
         title: &str,
-    ) -> Result<(), AppError> {
+    ) -> Result<ChatSession, AppError> {
         let result = sqlx::query(
             "UPDATE chat_sessions SET title = ?1 WHERE id = ?2 AND user_id = ?3"
         )
@@ -268,7 +290,16 @@ impl WebchatService {
             return Err(AppError::not_found("Session", session_id));
         }
 
-        Ok(())
+        let row: ChatSessionRow = sqlx::query_as(
+            "SELECT id, user_id, channel, title, is_pinned, is_archived, created_at, updated_at FROM chat_sessions WHERE id = ?1 AND user_id = ?2"
+        )
+        .bind(session_id)
+        .bind(user_id)
+        .fetch_one(&self.db)
+        .await
+        .map_err(|e| AppError::database(e))?;
+
+        row.try_into().map_err(|e: String| AppError::Internal(e))
     }
 
     /// Toggle pin status, returning new pin state

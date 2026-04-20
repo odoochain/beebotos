@@ -5,13 +5,13 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::skills::registry::Version;
+
 /// Skill loader
 pub struct SkillLoader {
     skill_paths: Vec<PathBuf>,
     loaded_skills: HashMap<String, LoadedSkill>,
 }
-
-use crate::skills::registry::Version;
 
 /// Loaded skill info
 #[derive(Debug, Clone)]
@@ -21,6 +21,31 @@ pub struct LoadedSkill {
     pub version: Version,
     pub wasm_path: PathBuf,
     pub manifest: SkillManifest,
+}
+
+/// Function parameter definition
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FunctionParameter {
+    pub name: String,
+    pub param_type: String,
+    pub required: bool,
+    pub description: String,
+    #[serde(default)]
+    pub default_value: String,
+}
+
+/// Function definition exported by a skill
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FunctionDef {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub inputs: Vec<FunctionParameter>,
+    #[serde(default)]
+    pub outputs: Vec<FunctionParameter>,
+    #[serde(default)]
+    pub example: String,
 }
 
 /// Skill manifest
@@ -34,6 +59,16 @@ pub struct SkillManifest {
     pub capabilities: Vec<String>,
     pub permissions: Vec<String>,
     pub entry_point: String,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub functions: Vec<FunctionDef>,
+    /// 🆕 FIX: Markdown skill prompt template for LLM fallback execution
+    #[serde(default)]
+    pub prompt_template: String,
+    /// 🆕 FIX: Few-shot examples for LLM fallback execution
+    #[serde(default)]
+    pub examples: String,
 }
 
 impl SkillLoader {
@@ -62,6 +97,13 @@ impl SkillLoader {
             if skill_path.exists() {
                 let manifest = self.load_manifest(&skill_path).await?;
                 let wasm_path = skill_path.join("skill.wasm");
+
+                if !wasm_path.exists() {
+                    return Err(SkillLoadError::InvalidManifest(format!(
+                        "WASM file not found at {:?}",
+                        wasm_path
+                    )));
+                }
 
                 let skill = LoadedSkill {
                     id: skill_id.to_string(),
@@ -116,23 +158,14 @@ impl Default for SkillLoader {
 }
 
 /// Skill load errors
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum SkillLoadError {
+    #[error("Skill not found: {0}")]
     SkillNotFound(String),
+    #[error("IO error: {0}")]
     IoError(String),
+    #[error("Parse error: {0}")]
     ParseError(String),
+    #[error("Invalid manifest: {0}")]
     InvalidManifest(String),
 }
-
-impl std::fmt::Display for SkillLoadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SkillLoadError::SkillNotFound(s) => write!(f, "Skill not found: {}", s),
-            SkillLoadError::IoError(s) => write!(f, "IO error: {}", s),
-            SkillLoadError::ParseError(s) => write!(f, "Parse error: {}", s),
-            SkillLoadError::InvalidManifest(s) => write!(f, "Invalid manifest: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for SkillLoadError {}

@@ -56,4 +56,12 @@ message Capability {
   int64 expires_at = 3;
 }
 
+message SemanticVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+  string prerelease = 4;
+  string build = 5;
+}
+
 message Empty {}

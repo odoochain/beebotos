@@ -173,6 +173,18 @@ impl ApiEndpoints {
     pub const CHAIN_STATUS: &'static str = "/chain/status";
     pub const CHAIN_WALLET: &'static str = "/chain/wallet";
     pub const CHAIN_TRANSFER: &'static str = "/chain/wallet/transfer";
+
+    // Skills API
+    pub const SKILLS: &'static str = "/skills";
+    pub const SKILL_INSTALL: &'static str = "/skills/install";
+    pub const SKILL_DETAIL: &'static str = "/skills/"; // + id
+    pub const SKILL_UNINSTALL: &'static str = "/skills/{id}/uninstall";
+    pub const SKILL_EXECUTE: &'static str = "/skills/{id}/execute";
+
+    // Instance API
+    pub const INSTANCES: &'static str = "/instances";
+    pub const INSTANCE_DETAIL: &'static str = "/instances/"; // + id
+    pub const INSTANCE_EXECUTE: &'static str = "/instances/{id}/execute";
 }
 
 /// Gateway 服务

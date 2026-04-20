@@ -1,4 +1,4 @@
-use crate::api::{Settings as ApiSettings, Theme};
+use crate::api::{Settings as ApiSettings, SettingsService, Theme};
 use crate::state::use_app_state;
 use crate::utils::{use_theme, FormValidator, StringValidators};
 use leptos::prelude::*;
@@ -14,6 +14,8 @@ pub fn SettingsPage() -> impl IntoView {
     let saving = RwSignal::new(false);
     let save_message = RwSignal::new(None::<String>);
     let validator = RwSignal::new(FormValidator::new());
+    let error_message = RwSignal::new(None::<String>);
+    let loading = RwSignal::new(true);
 
     // Form signals
     let theme = RwSignal::new(Theme::Dark);
@@ -23,15 +25,47 @@ pub fn SettingsPage() -> impl IntoView {
     let api_endpoint = RwSignal::new(String::new());
     let wallet_address = RwSignal::new(String::new());
 
-    // Initialize from current settings
+    // Fetch settings from backend on mount
+    let client = crate::api::create_client();
+    let settings_service = SettingsService::new(client);
+    let service_stored = StoredValue::new(settings_service);
+
+    let fetch_settings = move || {
+        loading.set(true);
+        error_message.set(None);
+        let service = service_stored.get_value();
+        spawn_local(async move {
+            match service.get().await {
+                Ok(s) => {
+                    theme.set(s.theme.clone());
+                    language.set(s.language.clone());
+                    notifications_enabled.set(s.notifications_enabled);
+                    auto_update.set(s.auto_update);
+                    api_endpoint.set(s.api_endpoint.clone().unwrap_or_default());
+                    wallet_address.set(s.wallet_address.clone().unwrap_or_default());
+                    settings.set(s);
+                }
+                Err(e) => {
+                    error_message.set(Some(format!("Failed to load settings: {}", e)));
+                    // Fall back to local settings
+                    let s = settings.get();
+                    theme.set(s.theme.clone());
+                    language.set(s.language.clone());
+                    notifications_enabled.set(s.notifications_enabled);
+                    auto_update.set(s.auto_update);
+                    api_endpoint.set(s.api_endpoint.unwrap_or_default());
+                    wallet_address.set(s.wallet_address.unwrap_or_default());
+                }
+            }
+            loading.set(false);
+        });
+    };
+
+    let fetch_stored = StoredValue::new(fetch_settings);
+
+    // Initial fetch
     Effect::new(move |_| {
-        let s = settings.get();
-        theme.set(s.theme.clone());
-        language.set(s.language.clone());
-        notifications_enabled.set(s.notifications_enabled);
-        auto_update.set(s.auto_update);
-        api_endpoint.set(s.api_endpoint.unwrap_or_default());
-        wallet_address.set(s.wallet_address.unwrap_or_default());
+        fetch_stored.get_value()();
     });
 
     // Apply theme when changed
@@ -60,7 +94,7 @@ pub fn SettingsPage() -> impl IntoView {
         v.is_valid()
     };
 
-    let on_save = move |_| {
+    let on_save = move || {
         if !validate() {
             return;
         }
@@ -84,20 +118,29 @@ pub fn SettingsPage() -> impl IntoView {
 
         saving.set(true);
         save_message.set(None);
+        error_message.set(None);
 
-        // Simulate save - clone settings signal for async
-        let settings = app_state.settings();
+        let service = service_stored.get_value();
+        let settings_signal = app_state.settings();
         spawn_local(async move {
-            gloo_timers::future::TimeoutFuture::new(500).await;
-            settings.set(new_settings);
-            saving.set(false);
-            save_message.set(Some("Settings saved successfully".to_string()));
+            match service.update(&new_settings).await {
+                Ok(_) => {
+                    settings_signal.set(new_settings);
+                    saving.set(false);
+                    save_message.set(Some("Settings saved successfully".to_string()));
 
-            // Clear message after 3 seconds
-            gloo_timers::future::TimeoutFuture::new(3000).await;
-            save_message.set(None);
+                    // Clear message after 3 seconds
+                    gloo_timers::future::TimeoutFuture::new(3000).await;
+                    save_message.set(None);
+                }
+                Err(e) => {
+                    saving.set(false);
+                    error_message.set(Some(format!("Failed to save: {}", e)));
+                }
+            }
         });
     };
+    let on_save_stored = StoredValue::new(on_save);
 
     view! {
         <Title text="Settings - BeeBotOS" />
@@ -107,177 +150,216 @@ pub fn SettingsPage() -> impl IntoView {
                 <p class="page-description">"Manage your preferences and system configuration"</p>
             </div>
 
-            <div class="settings-grid">
-                <section class="card settings-section">
-                    <h2>"Appearance"</h2>
-
-                    <div class="form-group">
-                        <label>"Theme"</label>
-                        <div class="theme-selector">
-                            <ThemeOption
-                                label="Dark"
-                                value=Theme::Dark
-                                current=theme
-                                icon="🌙"
-                            />
-                            <ThemeOption
-                                label="Light"
-                                value=Theme::Light
-                                current=theme
-                                icon="☀️"
-                            />
-                            <ThemeOption
-                                label="System"
-                                value=Theme::System
-                                current=theme
-                                icon="💻"
-                            />
-                        </div>
+            {move || if loading.get() {
+                view! {
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <p>"Loading settings..."</p>
                     </div>
-
-                    <div class="form-group">
-                        <label>"Language"</label>
-                        <select
-                            prop:value=language
-                            on:change=move |e| language.set(event_target_value(&e))
-                        >
-                            <option value="en">"English"</option>
-                            <option value="zh">"中文"</option>
-                            <option value="ja">"日本語"</option>
-                            <option value="ko">"한국어"</option>
-                        </select>
-                    </div>
-                </section>
-
-                <section class="card settings-section">
-                    <h2>"Notifications"</h2>
-
-                    <div class="form-group checkbox-group">
-                        <label class="checkbox-label">
-                            <input
-                                type="checkbox"
-                                prop:checked=notifications_enabled
-                                on:change=move |e| notifications_enabled.set(event_target_checked(&e))
-                            />
-                            <span>"Enable notifications"</span>
-                        </label>
-                        <p class="form-help">"Receive alerts about agent status and DAO governance"</p>
-                    </div>
-
-                    <div class="form-group checkbox-group">
-                        <label class="checkbox-label">
-                            <input
-                                type="checkbox"
-                                prop:checked=auto_update
-                                on:change=move |e| auto_update.set(event_target_checked(&e))
-                            />
-                            <span>"Auto-update"</span>
-                        </label>
-                        <p class="form-help">"Automatically update to the latest version"</p>
-                    </div>
-                </section>
-
-                <section class="card settings-section">
-                    <h2>"Network"</h2>
-
-                    <div class=move || format!("form-group {}",
-                        if validator.get().has_error("api_endpoint") { "has-error" } else { "" })>
-                        <label>"API Endpoint"</label>
-                        <input
-                            type="text"
-                            placeholder="https://api.beebotos.dev"
-                            prop:value=api_endpoint
-                            on:input=move |e| {
-                                api_endpoint.set(event_target_value(&e));
-                                validator.update(|v| {
-                                    if !api_endpoint.get().is_empty() {
-                                        v.validate(StringValidators::url("api_endpoint", &api_endpoint.get()));
-                                    }
-                                });
-                            }
-                        />
-                        <p class="form-help">"Custom API endpoint (leave empty for default)"</p>
-                        {move || validator.get().first_error_message("api_endpoint").map(|msg| view! {
-                            <span class="form-error">{msg}</span>
+                }.into_any()
+            } else {
+                view! {
+                    <>
+                        {move || error_message.get().map(|msg| view! {
+                            <div class="alert alert-error">{msg}</div>
                         })}
-                    </div>
-                </section>
 
-                <section class="card settings-section">
-                    <h2>"Wallet"</h2>
+                        <div class="settings-grid">
+                            <section class="card settings-section">
+                                <h2>"Appearance"</h2>
 
-                    <div class=move || format!("form-group {}",
-                        if validator.get().has_error("wallet_address") { "has-error" } else { "" })>
-                        <label>"Wallet Address"</label>
-                        <input
-                            type="text"
-                            placeholder="0x..."
-                            prop:value=wallet_address
-                            on:input=move |e| {
-                                wallet_address.set(event_target_value(&e));
-                                validator.update(|v| {
-                                    if !wallet_address.get().is_empty() {
-                                        v.validate(StringValidators::ethereum_address("wallet_address", &wallet_address.get()));
-                                    }
-                                });
-                            }
-                        />
-                        <p class="form-help">"Your wallet address for DAO participation"</p>
-                        {move || validator.get().first_error_message("wallet_address").map(|msg| view! {
-                            <span class="form-error">{msg}</span>
-                        })}
-                    </div>
+                                <div class="form-group">
+                                    <label>"Theme"</label>
+                                    <div class="theme-selector">
+                                        <ThemeOption
+                                            label="Dark"
+                                            value=Theme::Dark
+                                            current=theme
+                                            icon="🌙"
+                                        />
+                                        <ThemeOption
+                                            label="Light"
+                                            value=Theme::Light
+                                            current=theme
+                                            icon="☀️"
+                                        />
+                                        <ThemeOption
+                                            label="System"
+                                            value=Theme::System
+                                            current=theme
+                                            icon="💻"
+                                        />
+                                    </div>
+                                </div>
 
-                    <div class="wallet-actions">
-                        <button class="btn btn-secondary">"Connect Wallet"</button>
-                        <button class="btn btn-secondary">"Disconnect"</button>
-                    </div>
-                </section>
+                                <div class="form-group">
+                                    <label>"Language"</label>
+                                    <select
+                                        prop:value=language
+                                        on:change=move |e| language.set(event_target_value(&e))
+                                    >
+                                        <option value="en">"English"</option>
+                                        <option value="zh">"中文"</option>
+                                        <option value="ja">"日本語"</option>
+                                        <option value="ko">"한국어"</option>
+                                    </select>
+                                </div>
+                            </section>
 
-                <section class="card settings-section">
-                    <h2>"System"</h2>
+                            <section class="card settings-section">
+                                <h2>"Notifications"</h2>
 
-                    <div class="system-info">
-                        <div class="info-row">
-                            <span>"Version"</span>
-                            <span>"v2.0.0"</span>
+                                <div class="form-group checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            prop:checked=notifications_enabled
+                                            on:change=move |e| notifications_enabled.set(event_target_checked(&e))
+                                        />
+                                        <span>"Enable notifications"</span>
+                                    </label>
+                                    <p class="form-help">"Receive alerts about agent status and DAO governance"</p>
+                                </div>
+
+                                <div class="form-group checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input
+                                            type="checkbox"
+                                            prop:checked=auto_update
+                                            on:change=move |e| auto_update.set(event_target_checked(&e))
+                                        />
+                                        <span>"Auto-update"</span>
+                                    </label>
+                                    <p class="form-help">"Automatically update to the latest version"</p>
+                                </div>
+                            </section>
+
+                            <section class="card settings-section">
+                                <h2>"Network"</h2>
+
+                                <div class=move || format!("form-group {}",
+                                    if validator.get().has_error("api_endpoint") { "has-error" } else { "" })>
+                                    <label>"API Endpoint"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="https://api.beebotos.dev"
+                                        prop:value=api_endpoint
+                                        on:input=move |e| {
+                                            api_endpoint.set(event_target_value(&e));
+                                            validator.update(|v| {
+                                                if !api_endpoint.get().is_empty() {
+                                                    v.validate(StringValidators::url("api_endpoint", &api_endpoint.get()));
+                                                }
+                                            });
+                                        }
+                                    />
+                                    <p class="form-help">"Custom API endpoint (leave empty for default)"</p>
+                                    {move || validator.get().first_error_message("api_endpoint").map(|msg| view! {
+                                        <span class="form-error">{msg}</span>
+                                    })}
+                                </div>
+                            </section>
+
+                            <section class="card settings-section">
+                                <h2>"Wallet"</h2>
+
+                                <div class=move || format!("form-group {}",
+                                    if validator.get().has_error("wallet_address") { "has-error" } else { "" })>
+                                    <label>"Wallet Address"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="0x..."
+                                        prop:value=wallet_address
+                                        on:input=move |e| {
+                                            wallet_address.set(event_target_value(&e));
+                                            validator.update(|v| {
+                                                if !wallet_address.get().is_empty() {
+                                                    v.validate(StringValidators::ethereum_address("wallet_address", &wallet_address.get()));
+                                                }
+                                            });
+                                        }
+                                    />
+                                    <p class="form-help">"Your wallet address for DAO participation"</p>
+                                    {move || validator.get().first_error_message("wallet_address").map(|msg| view! {
+                                        <span class="form-error">{msg}</span>
+                                    })}
+                                </div>
+
+                                <div class="wallet-actions">
+                                    <button class="btn btn-secondary">"Connect Wallet"</button>
+                                    <button class="btn btn-secondary">"Disconnect"</button>
+                                </div>
+                            </section>
+
+                            <section class="card settings-section">
+                                <h2>"System"</h2>
+
+                                <div class="system-info">
+                                    <div class="info-row">
+                                        <span>"Version"</span>
+                                        <span>"v2.0.0"</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span>"Build"</span>
+                                        <span>"release-2024.03.22"</span>
+                                    </div>
+                                    <div class="info-row">
+                                        <span>"Platform"</span>
+                                        <span>"WebAssembly"</span>
+                                    </div>
+                                </div>
+
+                                <div class="system-actions">
+                                    <button class="btn btn-secondary">"Check for Updates"</button>
+                                    <button
+                                        class="btn btn-secondary"
+                                        on:click=move |_| {
+                                            let client = crate::api::create_client();
+                                            spawn_local(async move {
+                                                match client.post::<serde_json::Value, _>("/admin/config/reload", &serde_json::json!({})).await {
+                                                    Ok(resp) => {
+                                                        let msg = resp.get("message").and_then(|v| v.as_str()).unwrap_or("Config reloaded");
+                                                        save_message.set(Some(msg.to_string()));
+                                                    }
+                                                    Err(e) => {
+                                                        error_message.set(Some(format!("Reload failed: {}", e)));
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    >
+                                        "Reload Config"
+                                    </button>
+                                    <button class="btn btn-danger">"Reset to Defaults"</button>
+                                </div>
+                            </section>
                         </div>
-                        <div class="info-row">
-                            <span>"Build"</span>
-                            <span>"release-2024.03.22"</span>
+
+                        <div class="settings-footer">
+                            {move || save_message.get().map(|msg| view! {
+                                <div class="save-message success">{msg}</div>
+                            })}
+                            {move || error_message.get().map(|msg| view! {
+                                <div class="save-message error">{msg}</div>
+                            })}
+
+                            <div class="settings-actions">
+                                <button
+                                    class="btn btn-primary"
+                                    on:click=move |_| on_save_stored.get_value()()
+                                    disabled=saving
+                                >
+                                    {move || if saving.get() {
+                                        "Saving..."
+                                    } else {
+                                        "Save Changes"
+                                    }}
+                                </button>
+                            </div>
                         </div>
-                        <div class="info-row">
-                            <span>"Platform"</span>
-                            <span>"WebAssembly"</span>
-                        </div>
-                    </div>
-
-                    <div class="system-actions">
-                        <button class="btn btn-secondary">"Check for Updates"</button>
-                        <button class="btn btn-danger">"Reset to Defaults"</button>
-                    </div>
-                </section>
-            </div>
-
-            <div class="settings-footer">
-                {move || save_message.get().map(|msg| view! {
-                    <div class="save-message success">{msg}</div>
-                })}
-
-                <div class="settings-actions">
-                    <button
-                        class="btn btn-primary"
-                        on:click=on_save
-                        disabled=saving
-                    >
-                        {move || if saving.get() {
-                            "Saving..."
-                        } else {
-                            "Save Changes"
-                        }}
-                    </button>
-                </div>
-            </div>
+                    </>
+                }.into_any()
+            }}
         </div>
     }
 }

@@ -4,8 +4,6 @@
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
     use std::collections::HashMap;
 
     // Test configuration persistence
@@ -282,7 +280,7 @@ mod tests {
     #[test]
     fn test_transaction_receipt() {
         use crate::wallet::TransactionReceipt;
-        use beebotos_chain::compat::{B256, U256};
+        use beebotos_chain::compat::B256;
 
         let receipt = TransactionReceipt {
             tx_hash: B256::ZERO,

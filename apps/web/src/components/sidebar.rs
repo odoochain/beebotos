@@ -89,6 +89,12 @@ pub fn Sidebar() -> impl IntoView {
                             label=move || i18n_stored.get_value().t("nav-skills")
                             current_path=current_path
                         />
+                        <NavItem
+                            href="/skill-instances"
+                            icon="🤖"
+                            label=move || i18n_stored.get_value().t("nav-skill-instances")
+                            current_path=current_path
+                        />
                     </div>
                 </div>
 

@@ -17,6 +17,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 use crate::error::Result;
+use crate::llm::traits::LLMProvider;
 // Note: CommandHandler can work without runtime for basic commands
 // For system commands like /status, a runtime trait object can be injected
 
@@ -97,6 +98,7 @@ pub struct RuntimeStatus {
 pub struct CommandHandler {
     commands: RwLock<HashMap<String, Arc<dyn Command>>>,
     runtime: Option<Arc<dyn RuntimeInfo>>,
+    llm: Option<Arc<dyn LLMProvider>>,
 }
 
 impl CommandHandler {
@@ -105,6 +107,7 @@ impl CommandHandler {
         Self {
             commands: RwLock::new(HashMap::new()),
             runtime: None,
+            llm: None,
         }
     }
 
@@ -115,12 +118,41 @@ impl CommandHandler {
         handler
     }
 
+    /// Create with LLM provider for AI-powered commands
+    pub fn with_llm(llm: Arc<dyn LLMProvider>) -> Self {
+        let mut handler = Self::new();
+        handler.llm = Some(llm);
+        handler
+    }
+
+    /// Create with both runtime and LLM provider
+    pub fn with_runtime_and_llm(runtime: Arc<dyn RuntimeInfo>, llm: Arc<dyn LLMProvider>) -> Self {
+        let mut handler = Self::new();
+        handler.runtime = Some(runtime);
+        handler.llm = Some(llm);
+        handler
+    }
+
     /// Initialize and register all built-in commands
     pub async fn initialize(&self) {
         self.register(Arc::new(HelpCommand)).await;
         self.register(Arc::new(StatusCommand::new(self.runtime.clone()))).await;
         self.register(Arc::new(PingCommand)).await;
         self.register(Arc::new(TasksCommand::new(self.runtime.clone()))).await;
+        
+        // Create LinkHandler once and reuse for SummarizeCommand
+        let link_handler = self.llm.as_ref().and_then(|llm| {
+            match super::LinkHandler::new(llm.clone()) {
+                Ok(handler) => Some(Arc::new(handler)),
+                Err(e) => {
+                    tracing::warn!("Failed to create LinkHandler: {}", e);
+                    None
+                }
+            }
+        });
+        self.register(Arc::new(SummarizeCommand::new(link_handler))).await;
+        
+        self.register(Arc::new(StartCommand)).await;
         info!("Command handler initialized with built-in commands");
     }
 
@@ -390,12 +422,12 @@ impl Command for TasksCommand {
 
 /// Summarize command - summarize a URL
 pub struct SummarizeCommand {
-    // This would integrate with LinkHandler
+    link_handler: Option<Arc<super::LinkHandler>>,
 }
 
 impl SummarizeCommand {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(link_handler: Option<Arc<super::LinkHandler>>) -> Self {
+        Self { link_handler }
     }
 }
 
@@ -423,7 +455,19 @@ impl Command for SummarizeCommand {
         }
 
         let url = args[0];
-        Ok(format!("⏳ 正在总结: {}\n请稍候...", url))
+
+        if let Some(ref handler) = self.link_handler {
+            match handler.process(url).await {
+                Ok(summary) => {
+                    Ok(super::format_summary_for_display(&summary))
+                }
+                Err(e) => {
+                    Ok(format!("❌ 总结失败: {}\n💡 请检查URL是否可访问", e))
+                }
+            }
+        } else {
+            Ok(format!("⏳ 正在总结: {}\n请稍候...", url))
+        }
     }
 }
 

@@ -202,23 +202,28 @@ pub async fn get_proposal(
 
     let proposal = chain_service.get_proposal(proposal_id).await?;
 
+    let status_str = format!("{:?}", proposal.status).to_lowercase();
+    let votes_for = proposal.votes_for.parse::<u64>().unwrap_or(0);
+    let votes_against = proposal.votes_against.parse::<u64>().unwrap_or(0);
+
     Ok(Json(json!({
-        "proposal": {
-            "id": proposal_id,
-            "title": proposal.title,
-            "description": proposal.description,
-            "status": format!("{:?}", proposal.status),
-            "votes_for": proposal.votes_for,
-            "votes_against": proposal.votes_against,
-            "votes_abstain": proposal.votes_abstain,
-        }
+        "id": proposal_id.to_string(),
+        "title": proposal.title,
+        "description": proposal.description,
+        "status": status_str,
+        "proposer": "",
+        "created_at": "",
+        "ends_at": "",
+        "votes_for": votes_for,
+        "votes_against": votes_against,
+        "user_voted": None::<bool>,
     })))
 }
 
 /// List active DAO proposals
 pub async fn list_proposals(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<serde_json::Value>, GatewayError> {
+) -> Result<Json<Vec<serde_json::Value>>, GatewayError> {
     let chain_service = state
         .chain_service
         .as_ref()
@@ -229,17 +234,46 @@ pub async fn list_proposals(
     let proposal_list: Vec<_> = proposals
         .into_iter()
         .map(|p| {
+            let status_str = format!("{:?}", p.status).to_lowercase();
+            let votes_for = p.votes_for.parse::<u64>().unwrap_or(0);
+            let votes_against = p.votes_against.parse::<u64>().unwrap_or(0);
             json!({
                 "id": p.id.to_string(),
                 "title": p.title,
-                "status": format!("{:?}", p.status),
+                "description": p.description,
+                "status": status_str,
+                "proposer": "",
+                "created_at": "",
+                "ends_at": "",
+                "votes_for": votes_for,
+                "votes_against": votes_against,
+                "user_voted": None::<bool>,
             })
         })
         .collect();
 
+    Ok(Json(proposal_list))
+}
+
+/// Get DAO summary
+pub async fn get_dao_summary(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    let chain_service = state
+        .chain_service
+        .as_ref()
+        .ok_or_else(|| GatewayError::service_unavailable("DAO", "DAO service not available"))?;
+
+    let proposal_count = chain_service.get_proposal_count().await.unwrap_or(0);
+
     Ok(Json(json!({
-        "proposals": proposal_list,
-        "count": proposal_list.len(),
+        "member_count": 0u64,
+        "total_voting_power": 0u64,
+        "user_voting_power": 0u64,
+        "active_proposals": proposal_count as u32,
+        "total_proposals": proposal_count as u32,
+        "token_symbol": "BEE",
+        "token_balance": 0u64,
     })))
 }
 

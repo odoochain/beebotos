@@ -199,8 +199,4 @@ impl ClawHubClient {
     }
 }
 
-impl Default for ClawHubClient {
-    fn default() -> Self {
-        Self::new().expect("Failed to create ClawHubClient")
-    }
-}
+

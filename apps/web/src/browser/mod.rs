@@ -33,7 +33,9 @@ pub struct BrowserProfile {
     pub name: String,
     pub cdp_port: u16,
     pub color: String,
+    #[serde(default)]
     pub profile_type: ProfileType,
+    #[serde(default)]
     pub is_default: bool,
 }
 
@@ -95,6 +97,7 @@ impl Default for ProfileType {
 
 /// 浏览器连接状态
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum ConnectionStatus {
     Disconnected,
     Connecting,
@@ -115,8 +118,11 @@ pub struct BrowserInstance {
     pub profile_id: String,
     pub status: ConnectionStatus,
     pub current_url: Option<String>,
+    #[serde(default)]
     pub page_title: Option<String>,
+    #[serde(default)]
     pub connected_at: Option<String>,
+    #[serde(default)]
     pub last_activity: Option<String>,
 }
 
@@ -124,8 +130,15 @@ pub struct BrowserInstance {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrowserStatus {
     pub enabled: bool,
+    #[serde(default)]
     pub connected: bool,
+    #[serde(default)]
     pub instance_count: usize,
+    #[serde(default)]
+    pub profiles_count: i64,
+    #[serde(default)]
+    pub active_instances: i64,
+    #[serde(default)]
     pub profiles: Vec<BrowserProfileStatus>,
 }
 

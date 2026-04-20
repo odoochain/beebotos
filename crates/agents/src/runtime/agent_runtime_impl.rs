@@ -50,6 +50,8 @@ pub struct GatewayAgentRuntime {
     replanner: Option<Arc<dyn crate::planning::RePlanner>>,
     /// LLM interface for agent execution
     llm_interface: Option<Arc<dyn crate::communication::LLMCallInterface>>,
+    /// 🟢 P2 FIX: Skill registry for WASM skill execution
+    skill_registry: Option<Arc<crate::skills::SkillRegistry>>,
 }
 
 /// Handle to an agent's task
@@ -113,6 +115,12 @@ impl GatewayAgentRuntime {
         let replanner = Arc::new(crate::planning::ConditionRePlanner::new()) as Arc<dyn crate::planning::RePlanner>;
         info!("✅ Planning components initialized");
 
+        // 🟢 P2 FIX: Initialize skill registry (skills can be registered at runtime via API)
+        let skill_registry = Arc::new(crate::skills::SkillRegistry::new());
+        // 🆕 FIX: Auto-load markdown skills from skills/ directory so registry is never empty.
+        crate::skills::builtin_loader::load_builtin_skills(&skill_registry).await;
+        info!("✅ Skill registry initialized");
+
         let runtime = Self {
             state_manager: state_manager.clone(),
             kernel: kernel.clone(),
@@ -125,6 +133,7 @@ impl GatewayAgentRuntime {
             plan_executor: Some(plan_executor.clone()),
             replanner: Some(replanner.clone()),
             llm_interface: llm_interface.clone(),
+            skill_registry: Some(skill_registry.clone()),
         };
 
         // 🔒 P0 FIX: Recover agents from persistent state
@@ -144,6 +153,13 @@ impl GatewayAgentRuntime {
     /// 🟢 P2 FIX: Export metrics in Prometheus format
     pub fn export_metrics(&self) -> String {
         self.metrics.export_prometheus()
+    }
+
+    /// 🟢 P2 FIX: Inject an externally prepared skill registry (e.g. one that has
+    /// already had built-in skills registered).
+    pub fn with_skill_registry(mut self, registry: Arc<crate::skills::SkillRegistry>) -> Self {
+        self.skill_registry = Some(registry);
+        self
     }
 
     /// 🔒 P0 FIX: Recover agents from persistent state
@@ -252,9 +268,15 @@ impl GatewayAgentRuntime {
         }
 
         // Spawn agent in kernel
+        // 🆕 FIX: 添加 skill/planning 所需权限，避免 capability denied
         let capabilities = beebotos_kernel::capabilities::CapabilitySet::standard()
             .with_permission("llm:chat")
-            .with_permission("mcp:call");
+            .with_permission("network:outbound")
+            .with_permission("mcp:call")
+            .with_permission("wasm:execute")
+            .with_permission("file:read")
+            .with_permission("planning:execute")
+            .with_permission("skill:call");
 
         let mut builder = KernelAgentBuilder::new()
             .with_config(agent_config.clone())
@@ -318,6 +340,8 @@ impl GatewayAgentRuntime {
             match persistence.load_config(&record.agent_id).await {
                 Ok(Some(persisted_config)) => {
                     info!("Loaded full config from database for agent {}", record.agent_id);
+                    // 🔧 FIX: Fast-sync agents table record only (avoid slow save_config during recovery)
+                    let _ = persistence.sync_agents_table(&persisted_config).await;
                     return Ok(AgentConfig {
                         id: persisted_config.agent_id,
                         name: persisted_config.name,
@@ -348,7 +372,7 @@ impl GatewayAgentRuntime {
             .unwrap_or_else(|| "1.0.0".to_string());
 
         // Parse capabilities from metadata if available
-        let capabilities = record.metadata.get("capabilities")
+        let capabilities: Vec<String> = record.metadata.get("capabilities")
             .map(|c| c.split(',').map(|s| s.trim().to_string()).collect())
             .unwrap_or_default();
 
@@ -385,16 +409,35 @@ impl GatewayAgentRuntime {
                 base_mood: "neutral".to_string(),
             });
 
-        Ok(AgentConfig {
+        let config = AgentConfig {
             id: record.agent_id.clone(),
-            name,
+            name: name.clone(),
             description: format!("Recovered agent (previous state: {:?})", record.state),
-            version,
-            capabilities,
-            models,
-            memory,
-            personality,
-        })
+            version: version.clone(),
+            capabilities: capabilities.clone(),
+            models: models.clone(),
+            memory: memory.clone(),
+            personality: personality.clone(),
+        };
+
+        // 🔧 FIX: Fast-sync agents table for fallback config too
+        if let Some(persistence) = self.state_manager.persistence() {
+            let fallback = crate::state_manager::PersistedAgentConfig {
+                agent_id: record.agent_id.clone(),
+                name: name.clone(),
+                description: config.description.clone(),
+                version: version.clone(),
+                capabilities: capabilities.clone(),
+                model_config: models.clone(),
+                memory_config: memory.clone(),
+                personality_config: personality.clone(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            };
+            let _ = persistence.sync_agents_table(&fallback).await;
+        }
+
+        Ok(config)
     }
 
     /// Create with explicit state manager
@@ -429,6 +472,10 @@ impl GatewayAgentRuntime {
         let replanner = Arc::new(crate::planning::ConditionRePlanner::new()) as Arc<dyn crate::planning::RePlanner>;
         info!("✅ Planning components initialized");
 
+        // 🟢 P2 FIX: Initialize skill registry
+        let skill_registry = Arc::new(crate::skills::SkillRegistry::new());
+        info!("✅ Skill registry initialized");
+
         Self {
             state_manager,
             kernel,
@@ -441,6 +488,7 @@ impl GatewayAgentRuntime {
             plan_executor: Some(plan_executor),
             replanner: Some(replanner),
             llm_interface,
+            skill_registry: Some(skill_registry),
         }
     }
 
@@ -602,9 +650,15 @@ impl AgentRuntime for GatewayAgentRuntime {
         // Create agent handle
         let handle = if let Some(ref kernel) = self.kernel {
             // Spawn in kernel sandbox
+            // 🆕 FIX: 添加 skill/planning 所需权限，避免 capability denied
             let capabilities = beebotos_kernel::capabilities::CapabilitySet::standard()
                 .with_permission("llm:chat")
-                .with_permission("mcp:call");
+                .with_permission("network:outbound")
+                .with_permission("mcp:call")
+                .with_permission("wasm:execute")
+                .with_permission("file:read")
+                .with_permission("planning:execute")
+                .with_permission("skill:call");
 
             let mut builder = KernelAgentBuilder::new()
                 .with_config(agent_config.clone())
@@ -628,6 +682,11 @@ impl AgentRuntime for GatewayAgentRuntime {
             }
             if let Some(ref llm) = self.llm_interface {
                 builder = builder.with_llm_interface(llm.clone());
+            }
+
+            // 🟢 P2 FIX: Attach skill registry to agent
+            if let Some(ref registry) = self.skill_registry {
+                builder = builder.with_skill_registry(registry.clone());
             }
 
             let (task_id, task_sender) = builder

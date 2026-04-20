@@ -36,6 +36,8 @@ pub struct MessageProcessor {
     memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
     /// Webchat 持久化服务
     webchat_service: Option<Arc<WebchatService>>,
+    /// Skill 注册表
+    skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
 }
 
 impl MessageProcessor {
@@ -45,6 +47,7 @@ impl MessageProcessor {
         channel_registry: Arc<ChannelRegistry>,
         memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
         webchat_service: Option<Arc<WebchatService>>,
+        skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
     ) -> Self {
         Self {
             deduplicator: Arc::new(MessageDeduplicator::default()),
@@ -54,6 +57,7 @@ impl MessageProcessor {
             channel_registry,
             memory_system,
             webchat_service,
+            skill_registry,
         }
     }
 
@@ -177,7 +181,7 @@ impl MessageProcessor {
             })?;
 
         // 5.5 Memory 检索
-        let memory_context = self.build_memory_context(&content).await;
+        let (memory_context, _direct_answer) = self.build_memory_context(&content, 0).await;
 
         // 6. 调用 LLM（注入记忆上下文）
         let llm_response = self.call_llm_with_context(&message, &history, &images, &memory_context).await?;
@@ -371,10 +375,60 @@ impl MessageProcessor {
             })?;
 
         // 6.5 Memory 检索
-        let memory_context = self.build_memory_context(&content).await;
+        // 🆕 FIX: 先匹配 skill，计算额外 context 长度，再构建 memory_context 以调整 budget
+        let skill_match = self.try_match_skill(&content).await;
+        let extra_context_len = skill_match.as_ref().map_or(0, |(_, _, prompt)| prompt.len());
+        let (mut memory_context, direct_answer) = self.build_memory_context(&content, extra_context_len).await;
 
-        // 7. 构造 TaskConfig 并调用 AgentRuntime
-        let task_input = serde_json::json!({
+        // 🟢 P2 FIX: Memory 精确匹配直接返回，跳过 LLM
+        if let Some(answer) = direct_answer {
+            info!("🧠 P2 FAST PATH: Memory direct answer, skipping Agent/LLM for '{}'", content.chars().take(40).collect::<String>());
+            // 更新会话历史
+            self.session_manager
+                .add_message(&session.id, "assistant", &answer, false, vec![])
+                .await
+                .map_err(|e| GatewayError::Internal {
+                    message: format!("Failed to add assistant message: {}", e),
+                    correlation_id: Uuid::new_v4().to_string(),
+                })?;
+            // 发送回复
+            self.send_reply(platform, channel_id, &message, &answer).await?;
+            return Ok(());
+        }
+
+        // 7. 尝试匹配 Skill，并在构造 TaskConfig 前处理 skill 相关注入
+        // 🆕 FIX: skill prompt 直接注入 memory_context，使 llm_chat 也能获得丰富指引
+        // skill_match 已在 build_memory_context 之前计算，用于调整 dynamic budget
+        let mut has_skill_plan = false;
+        if let Some((ref skill_name, _, ref skill_prompt)) = skill_match {
+            if !skill_prompt.is_empty() {
+                memory_context.push_str("\n\n[系统提示：你当前正在使用 ");
+                memory_context.push_str(skill_name);
+                memory_context.push_str(" 技能处理此请求。请遵循以下专业指引]\n");
+                memory_context.push_str(skill_prompt);
+                info!("🎯 Skill prompt injected ({} chars) for '{}'", skill_prompt.len(), skill_name);
+            }
+            // 复杂 skill 强制触发 agent 端 planning
+            // 🆕 FIX: 只为分析/研究类 skill 强制触发 planning；生成类 skill（travel/writer/email等）
+            // 走一次性 LLM 生成，避免多步 planning 超时且输出质量差。
+            let skill_lower = skill_name.to_lowercase();
+            let is_generative_skill = skill_lower.contains("travel") || skill_lower.contains("planner")
+                || skill_lower.contains("writer") || skill_lower.contains("creator")
+                || skill_lower.contains("story") || skill_lower.contains("email")
+                || skill_lower.contains("master") || skill_lower.contains("game");
+            let is_analytical_skill = skill_lower.contains("developer") || skill_lower.contains("analyst")
+                || skill_lower.contains("advisor") || skill_lower.contains("manager")
+                || skill_lower.contains("auditor") || skill_lower.contains("researcher");
+            if is_analytical_skill && !is_generative_skill {
+                has_skill_plan = true;
+                info!("🎯 Analytical skill matched, will inject plan=true for '{}'", skill_name);
+            } else if is_generative_skill {
+                info!("🎯 Generative skill matched, skipping plan=true for '{}' (single-shot generation preferred)", skill_name);
+            }
+        }
+
+        // 8. 构造 TaskConfig
+        let mut task_input = serde_json::json!({
             "message": content,
             "history": history.iter().map(|m| serde_json::json!({"role": m.role, "content": m.content})).collect::<Vec<_>>(),
             "images": images.iter().map(|img| format!("data:{};base64,{},", img.mime_type, img.data)).collect::<Vec<_>>(),
@@ -385,105 +439,138 @@ impl MessageProcessor {
             "metadata": message.metadata,
             "memory_context": memory_context,
         });
+        if let Some((skill_name, skill_desc, skill_prompt)) = skill_match {
+            if let Some(obj) = task_input.as_object_mut() {
+                obj.insert("skill_hint".to_string(), serde_json::json!({
+                    "name": skill_name,
+                    "description": skill_desc,
+                    "prompt_template": skill_prompt,
+                }));
+                if has_skill_plan {
+                    obj.insert("plan".to_string(), serde_json::json!("true"));
+                }
+            }
+        }
 
         let task = gateway::TaskConfig {
             task_type: "llm_chat".to_string(),
             input: task_input,
-            timeout_secs: 60,
+            timeout_secs: 180,
             priority: 5,
         };
 
-        info!("🤖 调用 Agent {} 处理消息", agent_id);
-        let result = agent_runtime.execute_task(&agent_id, task).await
-            .map_err(|e| GatewayError::Internal {
-                message: format!("Agent execution failed: {}", e),
-                correlation_id: Uuid::new_v4().to_string(),
-            })?;
+        // 🟢 P2 FIX: 发送"正在思考..."占位消息，然后后台异步执行 Agent
+        let placeholder = "🤖 正在思考，请稍候...";
+        self.send_reply(platform, channel_id, &message, placeholder).await?;
 
-        let llm_response = if !result.success {
-            result.error.clone().unwrap_or_else(|| "Agent processing failed".to_string())
-        } else {
-            result.output.as_str()
-                .map(|s| s.to_string())
-                .or_else(|| result.output.get("response").and_then(|v| v.as_str()).map(|s| s.to_string()))
-                .unwrap_or_else(|| "Agent returned empty response".to_string())
-        };
+        // 克隆需要在后台任务中使用的数据
+        let processor = Arc::new(MessageProcessor {
+            deduplicator: Arc::clone(&self.deduplicator),
+            session_manager: Arc::clone(&self.session_manager),
+            multimodal_processor: MultimodalProcessor::new(), // placeholder, not used in bg
+            llm_service: Arc::clone(&self.llm_service),
+            channel_registry: Arc::clone(&self.channel_registry),
+            memory_system: self.memory_system.as_ref().map(Arc::clone),
+            webchat_service: self.webchat_service.as_ref().map(Arc::clone),
+            skill_registry: self.skill_registry.as_ref().map(Arc::clone),
+        });
+        let session_id = session.id.clone();
+        let db_session_id_bg = db_session_id.clone();
+        let user_id_bg = user_id.clone();
+        let content_bg = content.clone();
+        let channel_id_bg = channel_id.to_string();
+        let agent_id_bg = agent_id.clone();
+        let message_bg = message.clone();
+        let platform_bg = platform;
+        let agent_runtime_bg = Arc::clone(&agent_runtime);
 
-        info!("🤖 Agent {} 回复: {}", agent_id, llm_response);
+        tokio::spawn(async move {
+            info!("🤖 [BG] Agent {} 开始后台处理消息", agent_id_bg);
+            let start = std::time::Instant::now();
 
-        // 8. 添加助手回复到会话历史
-        self.session_manager
-            .add_message(&session.id, "assistant", &llm_response, false, vec![])
-            .await
-            .map_err(|e| GatewayError::Internal {
-                message: format!("Failed to add assistant message: {}", e),
-                correlation_id: Uuid::new_v4().to_string(),
-            })?;
-
-        // 8.5 持久化 AI 回复
-        if let Some(ref svc) = self.webchat_service {
-            let token_usage = serde_json::json!({
-                "model": "kimi-k2.5",
-                "prompt_tokens": history.len(),
-                "completion_tokens": llm_response.len(),
-            });
-            let _ = svc.save_message(
-                &db_session_id,
-                "assistant",
-                &llm_response,
-                Some(serde_json::json!({
-                    "platform": platform.to_string(),
-                    "channel_id": channel_id,
-                })),
-                Some(token_usage),
-            ).await;
-        }
-
-        // 9. 发送回复
-        self.send_reply(platform, channel_id, &message, &llm_response).await?;
-
-        // 10. Memory 回写
-        if let Some(ref memory) = self.memory_system {
-            use beebotos_agents::memory::markdown_storage::{MarkdownMemoryEntry, MemoryFileType};
-
-            let user_entry = MarkdownMemoryEntry {
-                id: Uuid::new_v4(),
-                timestamp: chrono::Utc::now(),
-                title: format!("User: {}", content.chars().take(30).collect::<String>()),
-                content: content.clone(),
-                category: "conversation".to_string(),
-                importance: 0.5,
-                metadata: {
-                    let mut m = HashMap::new();
-                    m.insert("session_id".to_string(), db_session_id.clone());
-                    m.insert("user_id".to_string(), user_id.clone());
-                    m.insert("role".to_string(), "user".to_string());
-                    m.insert("channel".to_string(), platform.to_string());
-                    m
-                },
-                session_id: Some(db_session_id.clone()),
+            let result = agent_runtime_bg.execute_task(&agent_id_bg, task).await;
+            let llm_response = match result {
+                Ok(r) if r.success => {
+                    r.output.as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| r.output.get("response").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_else(|| "Agent returned empty response".to_string())
+                }
+                Ok(r) => {
+                    r.error.clone().unwrap_or_else(|| "Agent processing failed".to_string())
+                }
+                Err(e) => {
+                    error!("❌ [BG] Agent execution failed: {}", e);
+                    format!("处理失败: {}", e)
+                }
             };
-            let _ = memory.store(MemoryFileType::Core, &user_entry, None).await;
 
-            let assistant_entry = MarkdownMemoryEntry {
-                id: Uuid::new_v4(),
-                timestamp: chrono::Utc::now(),
-                title: format!("Assistant: {}", llm_response.chars().take(30).collect::<String>()),
-                content: llm_response.clone(),
-                category: "conversation".to_string(),
-                importance: 0.5,
-                metadata: {
-                    let mut m = HashMap::new();
-                    m.insert("session_id".to_string(), db_session_id.clone());
-                    m.insert("user_id".to_string(), user_id.clone());
-                    m.insert("role".to_string(), "assistant".to_string());
-                    m.insert("channel".to_string(), platform.to_string());
-                    m
-                },
-                session_id: Some(db_session_id.clone()),
-            };
-            let _ = memory.store(MemoryFileType::Core, &assistant_entry, None).await;
-        }
+            info!("🤖 [BG] Agent {} 回复 ({}ms): {}", agent_id_bg, start.elapsed().as_millis(), llm_response.chars().take(100).collect::<String>());
+
+            // 更新会话历史
+            let _ = processor.session_manager
+                .add_message(&session_id, "assistant", &llm_response, false, vec![])
+                .await;
+
+            // 持久化 AI 回复
+            if let Some(ref svc) = processor.webchat_service {
+                let _ = svc.save_message(
+                    &db_session_id_bg,
+                    "assistant",
+                    &llm_response,
+                    Some(serde_json::json!({
+                        "platform": platform_bg.to_string(),
+                        "channel_id": channel_id_bg.clone(),
+                    })),
+                    None,
+                ).await;
+            }
+
+            // 发送最终回复
+            let _ = processor.send_reply(platform_bg, &channel_id_bg, &message_bg, &llm_response).await;
+
+            // Memory 回写
+            if let Some(ref memory) = processor.memory_system {
+                use beebotos_agents::memory::markdown_storage::{MarkdownMemoryEntry, MemoryFileType};
+                let user_entry = MarkdownMemoryEntry {
+                    id: Uuid::new_v4(),
+                    timestamp: chrono::Utc::now(),
+                    title: format!("User: {}", content_bg.chars().take(30).collect::<String>()),
+                    content: content_bg.clone(),
+                    category: "conversation".to_string(),
+                    importance: 0.5,
+                    metadata: {
+                        let mut m = HashMap::new();
+                        m.insert("session_id".to_string(), db_session_id_bg.clone());
+                        m.insert("user_id".to_string(), user_id_bg.clone());
+                        m.insert("role".to_string(), "user".to_string());
+                        m.insert("channel".to_string(), platform_bg.to_string());
+                        m
+                    },
+                    session_id: Some(db_session_id_bg.clone()),
+                };
+                let _ = memory.store(MemoryFileType::Core, &user_entry, None).await;
+
+                let assistant_entry = MarkdownMemoryEntry {
+                    id: Uuid::new_v4(),
+                    timestamp: chrono::Utc::now(),
+                    title: format!("Assistant: {}", llm_response.chars().take(30).collect::<String>()),
+                    content: llm_response.clone(),
+                    category: "conversation".to_string(),
+                    importance: 0.5,
+                    metadata: {
+                        let mut m = HashMap::new();
+                        m.insert("session_id".to_string(), db_session_id_bg.clone());
+                        m.insert("user_id".to_string(), user_id_bg.clone());
+                        m.insert("role".to_string(), "assistant".to_string());
+                        m.insert("channel".to_string(), platform_bg.to_string());
+                        m
+                    },
+                    session_id: Some(db_session_id_bg),
+                };
+                let _ = memory.store(MemoryFileType::Core, &assistant_entry, None).await;
+            }
+        });
 
         Ok(())
     }
@@ -595,24 +682,331 @@ impl MessageProcessor {
         })
     }
 
+    /// 🆕 FIX: 尝试匹配 Skill，返回最佳匹配的 skill hint (name, description, prompt_template)
+    /// 支持 domain keyword 映射 + registry 语义搜索 + name 子串匹配
+    async fn try_match_skill(&self, content: &str) -> Option<(String, String, String)> {
+        // 查询太短不应触发 skill 匹配
+        if content.chars().count() < 4 {
+            return None;
+        }
+        let registry = self.skill_registry.as_ref()?;
+        let query_lower = content.to_lowercase();
+
+        // 1. Domain keyword → skill ID 快速映射（中文 + 英文）
+        let domain_keywords: &[(&[&str], &str)] = &[
+            (&["travel", "tour", "trip", "itinerary", "旅游", "旅行", "行程", "攻略", "景点", "酒店", "规划", "计划"], "travel_planner"),
+            (&["code", "program", "develop", "debug", "coding", "编程", "代码", "开发", "python"], "python_developer"),
+            (&["rust", "cargo"], "rust_developer"),
+            (&["contract", "solidity", "smart contract", "合约", "区块链"], "solidity_developer"),
+            (&["write", "email", "draft", "邮件", "写信"], "email_writer"),
+            (&["story", "novel", "fiction", "write", "故事", "小说"], "story_writer"),
+            (&["game", "gaming", "游戏", "玩家"], "game_master"),
+            (&["data", "analyze", "analysis", "数据", "分析", "统计"], "data_analyst"),
+            (&["image", "photo", "picture", "图", "照片"], "image_analyst"),
+            (&["calendar", "schedule", "meeting", "日历", "会议", "安排"], "calendar_assistant"),
+            (&["task", "todo", "plan", "任务", "待办"], "task_manager"),
+            (&["defi", "yield", "liquidity", "farm", "挖矿", "流动性"], "yield_farmer"),
+            (&["nft", "mint", "token", "数字藏品"], "nft_minter"),
+            (&["health", "medical", "doctor", "健康", "医疗", "医生"], "health_advisor"),
+            (&["learn", "study", "tutor", "lesson", "学习", "课程", "辅导"], "tutor"),
+            (&["research", "paper", "survey", "研究", "论文", "调查"], "code_researcher"),
+            (&["dao", "governance", "proposal", "vote", "治理", "提案", "投票"], "governance_analyst"),
+            (&["finance", "portfolio", "invest", "理财", "投资", "组合", "黄金", "价格"], "portfolio_manager"),
+            (&["social", "community", "content", "社媒", "社群", "内容"], "content_creator"),
+            (&["security", "audit", "vulnerability", "安全", "审计", "漏洞"], "auditor"),
+            (&["weather", "forecast", "天气", "预报", "降雨", "温度"], "weather_assistant"),
+        ];
+
+        for (keywords, skill_id) in domain_keywords {
+            if keywords.iter().any(|kw| query_lower.contains(kw)) {
+                if let Some(skill) = registry.get(skill_id).await {
+                    if skill.enabled {
+                        info!("🎯 Skill domain matched: '{}' for query '{}'", skill_id, content.chars().take(40).collect::<String>());
+                        return Some((
+                            skill.skill.name.clone(),
+                            skill.skill.manifest.description.clone(),
+                            skill.skill.manifest.prompt_template.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 2. Registry semantic search fallback
+        let results = registry.search(content).await;
+        if results.is_empty() {
+            return None;
+        }
+        let best = &results[0];
+        let name_lower = best.skill.name.to_lowercase();
+        // name 子串强匹配
+        let is_strong_match = name_lower.contains(&query_lower)
+            || query_lower.contains(&name_lower);
+        if is_strong_match {
+            info!("🎯 Skill matched: '{}' for query '{}'", best.skill.id, content.chars().take(40).collect::<String>());
+            let hint = (
+                best.skill.name.clone(),
+                best.skill.manifest.description.clone(),
+                best.skill.manifest.prompt_template.clone(),
+            );
+            Some(hint)
+        } else {
+            debug!("Skill match too weak: '{}' for query '{}'", best.skill.id, content.chars().take(40).collect::<String>());
+            None
+        }
+    }
+
     /// P2 FIX: 提取共享的 Memory 搜索逻辑，消除双重搜索
-    async fn build_memory_context(&self, content: &str) -> String {
+    ///
+    /// 🟢 P2 FIX: 返回 (memory_context, direct_answer)。如果 Memory 中有高置信度的精确匹配问答对，
+    /// 直接提取答案返回，跳过 LLM 调用。
+    ///
+    /// 🆕 FIX (方案B): 固定档案与动态记忆分独立预算，简单查询可跳过冗余档案
+    async fn build_memory_context(&self, content: &str, extra_context_len: usize) -> (String, Option<String>) {
         let mut memory_context = String::new();
+        let mut direct_answer: Option<String> = None;
+
+        // 🆕 FIX: 根据 query 复杂度动态调整参数
+        let char_count = content.chars().count();
+        let is_simple = char_count <= 10;
+        let is_complex = char_count > 30
+            || content.contains("计划") || content.contains("规划") || content.contains("步骤")
+            || content.contains("安排") || content.contains("攻略") || content.contains("对比")
+            || content.contains("分析") || content.contains("总结");
+        let search_limit = if is_complex { 6 } else if char_count > 15 { 4 } else { 2 };
+
+        // 🆕 FIX (方案B): 独立预算体系
+        // 简单查询：加载核心用户档案 + 极简人格，system_budget=200
+        // 普通查询：固定档案 600 chars + 动态记忆 800 chars
+        // 复杂查询：固定档案 1000 chars + 动态记忆 1200 chars（避免 USER.md+SOUL.md 被截断）
+        // 🆕 FIX: 独立预算体系
+        // 简单查询：固定档案 300 chars + 动态记忆 400 chars
+        // 普通查询：固定档案 600 chars + 动态记忆 800 chars
+        // 复杂查询：固定档案 1000 chars + 动态记忆 1200 chars
+        let (system_budget, dynamic_budget): (usize, usize) = if is_simple {
+            (300, 400)
+        } else if is_complex {
+            (1000, 1200)
+        } else {
+            (600, 800)
+        };
+        // 🆕 FIX: 当外部注入了大段 skill prompt 等额外 context 时，相应缩减 dynamic memory budget
+        let adjusted_dynamic_budget = dynamic_budget.saturating_sub(extra_context_len).max(200);
+
+        // 🆕 FIX: 预加载 USER.md 和 SOUL.md 作为固定系统上下文
         if let Some(ref memory) = self.memory_system {
-            match memory.search(content, 5).await {
+            let storage = memory.storage();
+            let mut system_context = String::new();
+
+            if is_simple {
+                // 🆕 FIX: 极简模式也加载核心用户档案（名字、语言偏好等关键字段）
+                // 先加载 USER.md 的前 2 条有效关键信息
+                if let Ok(entries) = storage.read_entries(beebotos_agents::memory::MemoryFileType::User, None).await {
+                    let mut user_parts = Vec::new();
+                    for entry in entries {
+                        let trimmed = entry.content.trim();
+                        let is_placeholder = trimmed.contains("*To be filled")
+                            || trimmed.starts_with("- Name:") && trimmed.len() < 12
+                            || trimmed.starts_with("- Preferred language:") && trimmed.len() < 25
+                            || trimmed.starts_with("- Timezone:") && trimmed.len() < 15
+                            || trimmed.starts_with("- Communication style:") && trimmed.len() < 26
+                            || trimmed.starts_with("- Notification preferences:") && trimmed.len() < 31
+                            || trimmed.starts_with("- Professional background:") && trimmed.len() < 30
+                            || trimmed.starts_with("- Technical skills:") && trimmed.len() < 23
+                            || trimmed.starts_with("- Hobbies:") && trimmed.len() < 14;
+                        if !trimmed.is_empty() && !is_placeholder {
+                            user_parts.push(trimmed.to_string());
+                            if user_parts.len() >= 1 { break; }  // 🆕 FIX: 简单模式只取1条最关键档案，给SOUL.md留空间
+                        }
+                    }
+                    if !user_parts.is_empty() {
+                        system_context.push_str("## 用户档案\n");
+                        for part in &user_parts {
+                            system_context.push_str(&part);
+                            system_context.push('\n');
+                        }
+                        info!("📄 Simple query mode: loaded USER.md core profile ({} entries)", user_parts.len());
+                    }
+                }
+
+                // 再加载 SOUL.md 的第一句核心人格描述
+                if let Ok(entries) = storage.read_entries(beebotos_agents::memory::MemoryFileType::Soul, None).await {
+                    for entry in entries {
+                        let trimmed = entry.content.trim();
+                        if !trimmed.is_empty() && !trimmed.starts_with('#') && !trimmed.starts_with("---") {
+                            let first_line = trimmed.lines().next().unwrap_or(trimmed);
+                            if first_line.len() > 10 {
+                                if !system_context.is_empty() {
+                                    system_context.push('\n');
+                                }
+                                system_context.push_str("## AI 人格设定\n");
+                                system_context.push_str(first_line);
+                                system_context.push('\n');
+                                break;
+                            }
+                        }
+                    }
+                }
+                if system_context.is_empty() {
+                    system_context = "你是 BeeBotOS 的个人 AI 助手，用中文友好地回答用户。\n".to_string();
+                }
+                info!("📄 Simple query mode: loaded minimal persona ({} chars)", system_context.len());
+            } else {
+                // 标准模式：加载 USER.md + SOUL.md
+                // Read USER.md
+                match storage.read_entries(beebotos_agents::memory::MemoryFileType::User, None).await {
+                    Ok(entries) => {
+                        let mut user_parts = Vec::new();
+                        for entry in entries {
+                            let trimmed = entry.content.trim();
+                            let is_placeholder = trimmed.contains("*To be filled")
+                                || trimmed.starts_with("- Name:") && trimmed.len() < 12
+                                || trimmed.starts_with("- Preferred language:") && trimmed.len() < 25
+                                || trimmed.starts_with("- Timezone:") && trimmed.len() < 15
+                                || trimmed.starts_with("- Communication style:") && trimmed.len() < 26
+                                || trimmed.starts_with("- Notification preferences:") && trimmed.len() < 31
+                                || trimmed.starts_with("- Professional background:") && trimmed.len() < 30
+                                || trimmed.starts_with("- Technical skills:") && trimmed.len() < 23
+                                || trimmed.starts_with("- Hobbies:") && trimmed.len() < 14;
+                            if !trimmed.is_empty() && !is_placeholder {
+                                user_parts.push(trimmed.to_string());
+                            }
+                        }
+                        if !user_parts.is_empty() {
+                            system_context.push_str("## 用户档案\n");
+                            for part in &user_parts {
+                                system_context.push_str(&part);
+                                system_context.push('\n');
+                            }
+                            system_context.push('\n');
+                            info!("📄 Loaded USER.md profile ({} entries)", user_parts.len());
+                        } else {
+                            info!("📄 USER.md loaded but no valid entries after filtering");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("📄 Failed to load USER.md: {}", e);
+                    }
+                }
+
+                // Read SOUL.md
+                match storage.read_entries(beebotos_agents::memory::MemoryFileType::Soul, None).await {
+                    Ok(entries) => {
+                        let mut soul_parts = Vec::new();
+                        for entry in entries {
+                            let trimmed = entry.content.trim();
+                            let is_placeholder = trimmed.contains("Helpful and friendly")
+                                && trimmed.len() < 30
+                                || trimmed.starts_with("- Professional but approachable") && trimmed.len() < 35
+                                || trimmed.starts_with("- Detail-oriented") && trimmed.len() < 20
+                                || trimmed.starts_with("- Clear and concise") && trimmed.len() < 22
+                                || trimmed.starts_with("- Use examples when helpful") && trimmed.len() < 30
+                                || trimmed.starts_with("- Ask clarifying questions when needed") && trimmed.len() < 42
+                                || trimmed.starts_with("- Respect user privacy") && trimmed.len() < 25
+                                || trimmed.starts_with("- Decline harmful requests") && trimmed.len() < 30
+                                || trimmed.starts_with("- Be honest about limitations") && trimmed.len() < 32;
+                            if !trimmed.is_empty() && !is_placeholder {
+                                soul_parts.push(trimmed.to_string());
+                            }
+                        }
+                        if !soul_parts.is_empty() {
+                            system_context.push_str("## AI 人格设定\n");
+                            for part in &soul_parts {
+                                system_context.push_str(&part);
+                                system_context.push('\n');
+                            }
+                            system_context.push('\n');
+                            info!("📄 Loaded SOUL.md profile ({} entries)", soul_parts.len());
+                        } else {
+                            info!("📄 SOUL.md loaded but no valid entries after filtering");
+                        }
+                    }
+                    Err(e) => {
+                        warn!("📄 Failed to load SOUL.md: {}", e);
+                    }
+                }
+            }
+
+            // 🆕 FIX (方案B): 对固定档案做硬截断
+            if !system_context.is_empty() {
+                if system_context.len() > system_budget {
+                    // 安全截断：在字符边界处截断
+                    let mut truncated = String::with_capacity(system_budget);
+                    let mut current_len = 0;
+                    for ch in system_context.chars() {
+                        let ch_len = ch.len_utf8();
+                        if current_len + ch_len > system_budget - 10 {
+                            break;
+                        }
+                        truncated.push(ch);
+                        current_len += ch_len;
+                    }
+                    truncated.push_str("\n...（档案已精简）\n");
+                    system_context = truncated;
+                    info!("📄 System context truncated to {} chars (budget={})", system_context.len(), system_budget);
+                }
+                memory_context.push_str("\n\n[系统提示：以下是该用户的固定档案和AI人格设定，回答时必须始终遵守]\n");
+                memory_context.push_str(&system_context);
+            }
+
+            match memory.search(content, search_limit).await {
                 Ok(results) if !results.is_empty() => {
-                    info!("Memory search returned {} results for query '{}'", results.len(), content.chars().take(40).collect::<String>());
-                    let content_lower = content.to_lowercase();
+                    info!("Memory search returned {} results (limit={}) for query '{}'", results.len(), search_limit, content.chars().take(40).collect::<String>());
+                    let content_lower = content.to_lowercase().trim().to_string();
+
+                    // 🟢 P2 FIX: 检查是否有精确问答对可直接返回
+                    for r in &results {
+                        let mem_lower = r.entry.content.to_lowercase();
+                        if mem_lower.contains(&content_lower) {
+                            for marker in &["assistant:", "答：", "a:", "回答：", "助手："] {
+                                if let Some(pos) = mem_lower.find(marker) {
+                                    let answer = r.entry.content[pos + marker.len()..].trim().to_string();
+                                    if answer.len() > 5 && answer.len() < 500 {
+                                        info!("🧠 P2 MEMORY DIRECT HIT: 精确匹配，直接返回答案 ({} chars)", answer.len());
+                                        direct_answer = Some(answer);
+                                        break;
+                                    }
+                                }
+                            }
+                            if direct_answer.is_some() {
+                                break;
+                            }
+                        }
+                    }
+
                     let filtered: Vec<_> = results.iter()
                         .filter(|r| !r.entry.content.to_lowercase().contains(&content_lower))
-                        .take(5)
+                        .take(search_limit)
                         .collect();
                     if !filtered.is_empty() {
                         memory_context.push_str("\n\n[系统提示：以下是该用户的历史记忆，回答时必须结合这些信息]\n");
+                        // 🆕 FIX (方案B): 动态记忆独立预算，从 0 开始计算
+                        // 🆕 FIX: 单条记忆最多 200 chars，避免一条超长记忆占满 budget
+                        const MAX_ENTRY_LEN: usize = 200;
+                        let mut total_chars = 0;
                         for r in filtered {
-                            memory_context.push_str(&format!("- {}\n", r.entry.content));
+                            let mut entry_text = r.entry.content.clone();
+                            if entry_text.len() > MAX_ENTRY_LEN {
+                                let mut truncated = String::with_capacity(MAX_ENTRY_LEN);
+                                let mut current_len = 0;
+                                for ch in entry_text.chars() {
+                                    let ch_len = ch.len_utf8();
+                                    if current_len + ch_len > MAX_ENTRY_LEN - 6 { break; }
+                                    truncated.push(ch);
+                                    current_len += ch_len;
+                                }
+                                truncated.push_str("...");
+                                entry_text = truncated;
+                            }
+                            let entry = format!("- {}\n", entry_text);
+                            if total_chars + entry.len() > adjusted_dynamic_budget {
+                                memory_context.push_str("- ...（更多记忆已省略）\n");
+                                break;
+                            }
+                            memory_context.push_str(&entry);
+                            total_chars += entry.len();
                         }
-                        info!("Injecting memory context ({} chars) into LLM prompt", memory_context.len());
+                        info!("Injecting memory context ({} chars, system_budget={}, dynamic_budget={}) into LLM prompt", memory_context.len(), system_budget, adjusted_dynamic_budget);
                     } else {
                         info!("All memory results were self-referential, skipping injection");
                     }
@@ -625,7 +1019,7 @@ impl MessageProcessor {
                 }
             }
         }
-        memory_context
+        (memory_context, direct_answer)
     }
 
     /// 调用 LLM 并传入上下文

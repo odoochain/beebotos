@@ -1,4 +1,4 @@
-# Skill: Code Researcher
+# Code Researcher
 
 ## Description
 

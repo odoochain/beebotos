@@ -10,7 +10,7 @@ message Skill {
   string id = 1;
   string name = 2;
   string description = 3;
-  common.types.SemanticVersion version = 4;
+  beebotos.common.SemanticVersion version = 4;
   string author = 5;
   repeated string categories = 6;
   repeated Function functions = 7;

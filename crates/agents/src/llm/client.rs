@@ -245,6 +245,71 @@ impl LLMClient {
         Ok(response)
     }
 
+    /// 🟢 P2 FIX: Chat with optional max_tokens override for dynamic token limiting
+    pub async fn chat_with_max_tokens(
+        &self,
+        message: impl Into<String>,
+        max_tokens: u32,
+    ) -> LLMResult<String> {
+        let user_msg = Message::user(message);
+        
+        {
+            let mut context = self.context.write().await;
+            context.push(user_msg);
+        }
+
+        let messages = self.context.read().await.clone();
+        let mut request = LLMRequest {
+            messages,
+            config: RequestConfig {
+                max_tokens: Some(max_tokens),
+                ..self.config.clone()
+            },
+        };
+
+        // Add tools if registered
+        let tools = self.tools.read().await;
+        if !tools.is_empty() {
+            request.config.tools = Some(
+                tools.values().map(|t| t.definition()).collect()
+            );
+        }
+        drop(tools);
+
+        let start = std::time::Instant::now();
+        let response = self.provider.complete(request).await?;
+        let latency = start.elapsed();
+
+        // Update metrics
+        {
+            let mut metrics = self.metrics.write().await;
+            metrics.total_requests += 1;
+            metrics.successful_requests += 1;
+            if let Some(usage) = &response.usage {
+                metrics.total_tokens += usage.total_tokens as u64;
+            }
+            metrics.total_latency_ms += latency.as_millis() as u64;
+        }
+
+        // Handle tool calls if present
+        let assistant_text = if let Some(choice) = response.choices.first() {
+            if let Some(tool_calls) = &choice.message.tool_calls {
+                return self.handle_tool_calls(tool_calls).await;
+            }
+            choice.message.text_content()
+        } else {
+            return Err(LLMError::Provider("Empty response".to_string()));
+        };
+
+        // Add assistant response to context
+        {
+            let mut context = self.context.write().await;
+            context.push(Message::assistant(&assistant_text));
+        }
+
+        Ok(assistant_text)
+    }
+
     /// Execute with current context
     ///
     /// ARCHITECTURE FIX: Enforces rate limiting before making request.

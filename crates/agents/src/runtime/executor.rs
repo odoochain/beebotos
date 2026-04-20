@@ -131,7 +131,7 @@ impl BatchExecutor {
         Self {
             max_concurrency,
             batch_timeout: Duration::from_secs(300),
-            task_timeout: Duration::from_secs(60),
+            task_timeout: Duration::from_secs(180),
         }
     }
 
@@ -250,7 +250,7 @@ impl BatchExecutor {
                 let exec = executor.clone();
 
                 tokio::spawn(async move {
-                    let result = tokio::time::timeout(Duration::from_secs(60), exec(task)).await;
+                    let result = tokio::time::timeout(Duration::from_secs(180), exec(task)).await;
 
                     let task_result = match result {
                         Ok(r) => r,

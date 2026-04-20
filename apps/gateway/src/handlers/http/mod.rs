@@ -2,17 +2,23 @@
 //!
 //! REST API handlers for Gateway.
 
+pub mod admin_config;
+pub mod agent_logs;
 pub mod agents;
 pub mod agents_v2;
 pub mod auth;
+pub mod browser;
 pub mod chain;
 pub mod chain_v2;
 pub mod channels;
+pub mod llm_config;
 pub mod llm_metrics;
 pub mod skills;
 pub mod state_machine;
 pub mod task_monitor;
+pub mod treasury;
 pub mod user_channels;
+pub mod user_settings;
 pub mod webchat;
 pub mod webhooks;
 

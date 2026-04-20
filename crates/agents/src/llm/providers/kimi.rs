@@ -61,7 +61,7 @@ impl Default for KimiConfig {
             base_url: "https://api.moonshot.cn/v1".to_string(),
             api_key: String::new(),
             default_model: kimi_models::KIMI_LATEST.to_string(),
-            timeout: std::time::Duration::from_secs(60),
+            timeout: std::time::Duration::from_secs(120),
             retry_policy: RetryPolicy::default(),
             mode: ProviderMode::default(), // merge by default
         }
@@ -96,7 +96,7 @@ impl KimiConfig {
             base_url,
             api_key,
             default_model,
-            timeout: std::time::Duration::from_secs(60),
+            timeout: std::time::Duration::from_secs(120),
             retry_policy: RetryPolicy::default(),
             mode,
         })

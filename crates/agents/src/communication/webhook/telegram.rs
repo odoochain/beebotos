@@ -535,7 +535,7 @@ impl TelegramWebhookResponse {
 mod tests {
     use super::*;
     use crate::communication::channel::telegram_channel::{
-        TelegramChat, TelegramPhotoSize, TelegramUser,
+        TelegramChat, TelegramPhotoSize,
     };
 
     #[test]

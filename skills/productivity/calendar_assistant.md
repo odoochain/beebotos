@@ -1,4 +1,4 @@
-# Calendar Assistant Skill
+# Calendar Assistant
 
 ## Overview
 

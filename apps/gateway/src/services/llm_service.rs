@@ -280,7 +280,9 @@ impl LlmService {
         })?;
 
         // Build failover provider
-        let mut builder = FailoverProviderBuilder::new().primary(primary);
+        let mut builder = FailoverProviderBuilder::new()
+            .primary(primary)
+            .timeout_secs(config.models.request_timeout);
 
         for fallback in fallbacks {
             builder = builder.fallback(fallback);
@@ -520,6 +522,64 @@ impl LlmService {
 
         self.execute_llm_request(multimodal_content, message.content.clone(), true)
             .await
+    }
+
+    /// Execute a chat completion with pre-built messages
+    ///
+    /// 🆕 FIX: Supports proper system/user/assistant role separation
+    /// to avoid double-flattening in Agent→Gateway path.
+    pub async fn chat(&self, messages: Vec<LLMMessage>) -> Result<String, GatewayError> {
+        let start_time = std::time::Instant::now();
+
+        let request_config = RequestConfig {
+            model: self.get_default_model(),
+            temperature: self.get_default_temperature(),
+            max_tokens: Some(self.config.models.max_tokens),
+            stream: Some(false),
+            ..Default::default()
+        };
+
+        let request = beebotos_agents::llm::types::LLMRequest {
+            messages,
+            config: request_config,
+        };
+
+        let result = self.failover_provider.complete(request).await;
+        let latency_ms = start_time.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(response) => {
+                let content = response
+                    .choices
+                    .first()
+                    .map(|choice| choice.message.text_content())
+                    .unwrap_or_default();
+
+                let (input_tokens, output_tokens) = response.usage.as_ref().map_or((0, 0), |u| {
+                    (u.prompt_tokens, u.completion_tokens)
+                });
+
+                self.metrics
+                    .record_success(latency_ms, input_tokens, output_tokens)
+                    .await;
+
+                info!(
+                    "✅ Received LLM response: length={}, latency={}ms, tokens={}/{}",
+                    content.len(),
+                    latency_ms,
+                    input_tokens,
+                    output_tokens
+                );
+                Ok(content)
+            }
+            Err(e) => {
+                self.metrics.record_failure();
+                Err(GatewayError::Internal {
+                    message: format!("LLM request failed: {}", e),
+                    correlation_id: uuid::Uuid::new_v4().to_string(),
+                })
+            }
+        }
     }
 
     /// Execute LLM request with processed multimodal content

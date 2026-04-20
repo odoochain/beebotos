@@ -343,7 +343,7 @@ mod tests {
         // 轮询应该选择不同的服务
         let selected1 = router.select_round_robin(&services);
         let selected2 = router.select_round_robin(&services);
-        let selected3 = router.select_round_robin(&services);
+        let _selected3 = router.select_round_robin(&services);
         let selected4 = router.select_round_robin(&services);
 
         // 第1个和第4个应该相同（3个服务循环）

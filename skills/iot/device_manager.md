@@ -1,4 +1,4 @@
-# Skill: IoT Device Manager
+# IoT Device Manager
 
 ## Description
 

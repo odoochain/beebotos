@@ -1,4 +1,4 @@
-# Skill: Data Analyst
+# Data Analyst
 
 ## Description
 

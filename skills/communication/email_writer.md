@@ -1,4 +1,4 @@
-# Email Writer Skill
+# Email Writer
 
 ## Description
 Professional email composition assistant for business and personal communication.

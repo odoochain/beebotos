@@ -1,4 +1,4 @@
-# Skill: Game Master
+# Game Master
 
 ## Description
 

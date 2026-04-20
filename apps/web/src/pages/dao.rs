@@ -1,4 +1,4 @@
-use crate::api::{DaoSummary, ProposalInfo, ProposalStatus};
+use crate::api::{CreateProposalRequest, DaoSummary, ProposalInfo, ProposalStatus};
 use crate::state::notification::NotificationType;
 use crate::state::use_app_state;
 use leptos::prelude::*;
@@ -10,12 +10,13 @@ use leptos_router::components::A;
 #[component]
 pub fn DaoPage() -> impl IntoView {
     let app_state = use_app_state();
-    let app_state_for_proposals = app_state.clone();
+    let app_state_clone1 = app_state.clone();
+    let app_state_clone2 = app_state.clone();
 
     // Fetch DAO summary - use LocalResource for CSR
     let dao_summary = LocalResource::new(move || {
-        let service = app_state.dao_service();
-        let loading = app_state.loading();
+        let service = app_state_clone1.dao_service();
+        let loading = app_state_clone1.loading();
         async move {
             loading.dao.set(true);
             let result = service.get_summary().await;
@@ -26,9 +27,43 @@ pub fn DaoPage() -> impl IntoView {
 
     // Fetch proposals
     let proposals = LocalResource::new(move || {
-        let service = app_state_for_proposals.dao_service();
+        let service = app_state_clone2.dao_service();
         async move { service.list_proposals().await }
     });
+
+    // Create proposal modal state
+    let create_open = RwSignal::new(false);
+    let create_title = RwSignal::new(String::new());
+    let create_desc = RwSignal::new(String::new());
+    let create_type = RwSignal::new("general".to_string());
+    let create_saving = RwSignal::new(false);
+    let create_error = RwSignal::new(None::<String>);
+
+    let on_create = move || {
+        let req = CreateProposalRequest {
+            title: create_title.get(),
+            description: create_desc.get(),
+            proposal_type: create_type.get(),
+        };
+        create_saving.set(true);
+        create_error.set(None);
+        let service = app_state.dao_service();
+        spawn_local(async move {
+            match service.create_proposal(req).await {
+                Ok(_) => {
+                    create_saving.set(false);
+                    create_open.set(false);
+                    create_title.set(String::new());
+                    create_desc.set(String::new());
+                    proposals.refetch();
+                }
+                Err(e) => {
+                    create_saving.set(false);
+                    create_error.set(Some(format!("Failed to create proposal: {}", e)));
+                }
+            }
+        });
+    };
 
     view! {
         <Title text="DAO Governance - BeeBotOS" />
@@ -55,8 +90,71 @@ pub fn DaoPage() -> impl IntoView {
             <section class="proposals-section">
                 <div class="section-header">
                     <h2>"Governance Proposals"</h2>
-                    <button class="btn btn-primary">"+ New Proposal"</button>
+                    <button class="btn btn-primary" on:click=move |_| create_open.set(true)>"+ New Proposal"</button>
                 </div>
+
+                // Create Proposal Modal
+                {move || if create_open.get() {
+                    view! {
+                        <div class="modal-overlay" on:click=move |_| create_open.set(false)>
+                            <div class="modal" on:click=move |e| e.stop_propagation()>
+                                <div class="modal-header">
+                                    <h3>"Create Proposal"</h3>
+                                    <button class="close-btn" on:click=move |_| create_open.set(false)>"✕"</button>
+                                </div>
+                                <div class="modal-body">
+                                    {move || create_error.get().map(|msg| view! {
+                                        <div class="alert alert-error">{msg}</div>
+                                    })}
+                                    <div class="form-group">
+                                        <label>"Title"</label>
+                                        <input
+                                            type="text"
+                                            prop:value=create_title
+                                            on:input=move |e| create_title.set(event_target_value(&e))
+                                            placeholder="Proposal title"
+                                        />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>"Description"</label>
+                                        <textarea
+                                            prop:value=create_desc
+                                            on:input=move |e| create_desc.set(event_target_value(&e))
+                                            placeholder="Describe your proposal..."
+                                        />
+                                    </div>
+                                    <div class="form-group">
+                                        <label>"Type"</label>
+                                        <select
+                                            prop:value=create_type
+                                            on:change=move |e| create_type.set(event_target_value(&e))
+                                        >
+                                            <option value="general">"General"</option>
+                                            <option value="funding">"Funding"</option>
+                                            <option value="upgrade">"Upgrade"</option>
+                                            <option value="parameter">"Parameter"</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button class="btn btn-secondary" on:click=move |_| create_open.set(false)>"Cancel"</button>
+                                    <button
+                                        class="btn btn-primary"
+                                        on:click={
+                                            let on_create = on_create.clone();
+                                            move |_| on_create()
+                                        }
+                                        disabled=create_saving
+                                    >
+                                        {move || if create_saving.get() { "Creating..." } else { "Create Proposal" }}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }.into_any()
+                } else {
+                    ().into_any()
+                }}
 
                 <Suspense fallback=|| view! { <ProposalsLoading/> }>
                     {move || Suspend::new(async move {
@@ -382,7 +480,6 @@ fn ProposalsEmpty() -> impl IntoView {
             <div class="empty-icon">"🏛️"</div>
             <h3>"No proposals yet"</h3>
             <p>"Be the first to create a governance proposal"</p>
-            <button class="btn btn-primary">"Create Proposal"</button>
         </div>
     }
 }

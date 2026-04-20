@@ -61,22 +61,16 @@ pub async fn get_llm_health(State(state): State<Arc<AppState>>) -> impl IntoResp
     match state.llm_service.health_check().await {
         Ok(_) => {
             let provider_status = state.llm_service.get_provider_status().await;
-            let healthy_providers = provider_status.iter().filter(|(_, healthy, _)| *healthy).count();
-            let total_providers = provider_status.len();
             
             Json(json!({
                 "status": "healthy",
-                "providers": {
-                    "total": total_providers,
-                    "healthy": healthy_providers,
-                    "details": provider_status.iter().map(|(name, healthy, failures)| {
-                        json!({
-                            "name": name,
-                            "healthy": healthy,
-                            "consecutive_failures": failures,
-                        })
-                    }).collect::<Vec<_>>(),
-                },
+                "providers": provider_status.iter().map(|(name, healthy, failures)| {
+                    json!({
+                        "name": name,
+                        "healthy": healthy,
+                        "consecutive_failures": failures,
+                    })
+                }).collect::<Vec<_>>(),
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }))
         }
@@ -84,6 +78,7 @@ pub async fn get_llm_health(State(state): State<Arc<AppState>>) -> impl IntoResp
             Json(json!({
                 "status": "unhealthy",
                 "error": e.to_string(),
+                "providers": [],
                 "timestamp": chrono::Utc::now().to_rfc3339(),
             }))
         }

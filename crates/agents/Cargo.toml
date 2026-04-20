@@ -75,6 +75,8 @@ hkdf = "0.12"
 # 🟢 P0 FIX: DAG scheduling dependencies
 petgraph = "0.6"
 thread_local = "1.1"
+# WASM parsing for security validation
+wasmparser = "0.246"
 
 [dev-dependencies]
 tokio-test = "0.4"

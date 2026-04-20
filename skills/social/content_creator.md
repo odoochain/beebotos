@@ -1,4 +1,4 @@
-# Skill: Content Creator
+# Content Creator
 
 ## Description
 

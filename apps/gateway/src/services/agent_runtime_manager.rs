@@ -33,27 +33,43 @@ impl beebotos_agents::communication::LLMCallInterface for GatewayLLMInterface {
     async fn call_llm(
         &self,
         messages: Vec<beebotos_agents::communication::Message>,
-        context: Option<std::collections::HashMap<String, String>>,
+        _context: Option<std::collections::HashMap<String, String>>,
     ) -> beebotos_agents::error::Result<String> {
-        // Build a conversation prompt from all messages instead of discarding context.
-        // This preserves memory context, history, and the current user message.
-        let prompt = messages
-            .into_iter()
-            .map(|m| m.content)
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        use beebotos_agents::llm::{Message as LLMMessage, Role};
 
-        let msg = beebotos_agents::communication::Message {
-            id: uuid::Uuid::new_v4(),
-            thread_id: uuid::Uuid::new_v4(),
-            platform: beebotos_agents::communication::PlatformType::Custom,
-            message_type: beebotos_agents::communication::MessageType::Text,
-            content: prompt,
-            metadata: context.unwrap_or_default(),
-            timestamp: chrono::Utc::now(),
+        // 🆕 FIX: 避免 double-flattening，保留 system/user/assistant 角色分离
+        let mut system_parts = Vec::new();
+        let mut llm_messages = Vec::new();
+
+        for (idx, msg) in messages.iter().enumerate() {
+            let content = msg.content.trim();
+            if idx == 0 {
+                // 第一条消息通常是 agent persona，放入 system
+                system_parts.push(content.to_string());
+            } else if content.starts_with("[系统提示") || content.starts_with("以下是与当前对话相关的历史记忆") {
+                system_parts.push(content.to_string());
+            } else if let Some(rest) = content.strip_prefix("用户:") {
+                llm_messages.push(LLMMessage::user(rest.trim().to_string()));
+            } else if let Some(rest) = content.strip_prefix("助手:") {
+                llm_messages.push(LLMMessage::assistant(rest.trim().to_string()));
+            } else if let Some(rest) = content.strip_prefix("系统:") {
+                system_parts.push(rest.trim().to_string());
+            } else {
+                // 默认作为 user message
+                llm_messages.push(LLMMessage::user(content.to_string()));
+            }
+        }
+
+        let final_messages = if !system_parts.is_empty() {
+            let system_text = system_parts.join("\n\n");
+            let mut msgs = vec![LLMMessage::system(system_text)];
+            msgs.extend(llm_messages);
+            msgs
+        } else {
+            llm_messages
         };
 
-        self.llm_service.process_message(&msg).await.map_err(|e| {
+        self.llm_service.chat(final_messages).await.map_err(|e| {
             beebotos_agents::error::AgentError::Execution(format!("LLM call failed: {}", e))
         })
     }
@@ -91,6 +107,7 @@ impl AgentInstance {
         kernel: Option<Arc<beebotos_kernel::Kernel>>,
         llm_service: Arc<crate::services::llm_service::LlmService>,
         memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
+        skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
     ) -> Result<Self, beebotos_agents::error::AgentError> {
         let agent_config = beebotos_agents::AgentConfig {
             id: agent_id.to_string(),
@@ -140,9 +157,10 @@ impl AgentInstance {
             info!("Agent memory system attached for agent {}", agent_id);
         }
 
-        // Attach skill registry
-        let skill_registry = Arc::new(beebotos_agents::skills::SkillRegistry::new());
-        agent = agent.with_skill_registry(skill_registry);
+        // Attach skill registry (use externally provided one if available)
+        if let Some(registry) = skill_registry {
+            agent = agent.with_skill_registry(registry);
+        }
 
         // Attach wallet if blockchain is enabled and a mnemonic is provided
         if config.blockchain.enabled {
@@ -220,6 +238,8 @@ pub struct AgentRuntimeManager {
     llm_service: Arc<crate::services::llm_service::LlmService>,
     /// Memory system for agent memory
     memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
+    /// Skill registry for agent skill execution
+    skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
 }
 
 impl AgentRuntimeManager {
@@ -230,6 +250,7 @@ impl AgentRuntimeManager {
         config: BeeBotOSConfig,
         llm_service: Arc<crate::services::llm_service::LlmService>,
         memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
+        skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
     ) -> Self {
         Self {
             kernel,
@@ -237,6 +258,7 @@ impl AgentRuntimeManager {
             config,
             llm_service,
             memory_system,
+            skill_registry,
         }
     }
 
@@ -246,9 +268,10 @@ impl AgentRuntimeManager {
         config: BeeBotOSConfig,
         llm_service: Arc<crate::services::llm_service::LlmService>,
         memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
+        skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
     ) -> Result<Self, crate::error::AppError> {
         let state_manager = Arc::new(beebotos_agents::AgentStateManager::new(None));
-        Ok(Self::new(kernel, state_manager, config, llm_service, memory_system))
+        Ok(Self::new(kernel, state_manager, config, llm_service, memory_system, skill_registry))
     }
     
     /// Get the LLM service
@@ -302,7 +325,7 @@ impl AgentRuntimeManager {
             .map_err(|e| AppError::Internal(format!("State transition failed: {}", e)))?;
 
         // Create and initialize agent instance
-        let instance = AgentInstance::new(agent_id, db_agent, &self.config, self.kernel.clone(), self.llm_service.clone(), self.memory_system.clone())
+        let instance = AgentInstance::new(agent_id, db_agent, &self.config, self.kernel.clone(), self.llm_service.clone(), self.memory_system.clone(), self.skill_registry.clone())
             .await
             .map_err(|e| {
                 let _ = self.state_manager.transition(

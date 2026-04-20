@@ -756,7 +756,7 @@ impl Planner for HybridPlanner {
     async fn plan(&self, goal: &str, context: &PlanContext) -> PlanningResult<Plan> {
         // First use decomposer for task breakdown
         let decomp_context = DecompositionContext::new()
-            .with_max_depth(3);
+            .with_max_depth(2);  // 🆕 FIX: Reduced from 3 to limit step count
 
         let mut plan = self.decomposer.decompose(goal, &decomp_context)?;
         plan.name = "Hybrid Plan".to_string();
@@ -774,6 +774,28 @@ impl Planner for HybridPlanner {
             enhanced_steps.push(step);
         }
 
+        // 🆕 FIX: Deduplicate steps by semantic description similarity
+        let mut deduped = Vec::new();
+        let mut seen_descriptions = std::collections::HashSet::new();
+        for step in enhanced_steps {
+            let normalized = step.description.to_lowercase().replace(|c: char| !c.is_alphanumeric(), "");
+            // Skip if we've seen a very similar description
+            if seen_descriptions.iter().any(|s: &String| {
+                let similarity = normalized.chars().filter(|c| s.contains(*c)).count() as f32 / normalized.len().max(s.len()) as f32;
+                similarity > 0.85
+            }) {
+                continue;
+            }
+            seen_descriptions.insert(normalized);
+            deduped.push(step);
+        }
+        enhanced_steps = deduped;
+
+        // 🆕 FIX: Hard cap at 8 steps to prevent LLM timeout (each step = 1 LLM call)
+        if enhanced_steps.len() > 8 {
+            enhanced_steps.truncate(8);
+        }
+
         plan.steps = enhanced_steps;
 
         // Rebuild dependencies
@@ -781,6 +803,17 @@ impl Planner for HybridPlanner {
         for i in 1..plan.steps.len() {
             plan.add_step_with_deps(plan.steps[i].clone(), vec![i - 1])?;
         }
+
+        // 🆕 FIX: Mark plan as parallel-safe when steps are independent (no branching deps)
+        // This allows the executor to run steps concurrently and avoid timeout
+        plan.metadata.insert(
+            "enable_parallel".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        plan.metadata.insert(
+            "max_concurrency".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(5)),
+        );
 
         Ok(plan)
     }

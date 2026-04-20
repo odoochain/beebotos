@@ -62,7 +62,18 @@ impl BeeHubClient {
     
     /// List all skills from BeeHub
     pub async fn list_skills(&self) -> Result<Vec<SkillMetadata>, HubError> {
-        let req = self.build_request(reqwest::Method::GET, "/skills");
+        self.search_skills("").await
+    }
+    
+    /// Search skills from BeeHub
+    pub async fn search_skills(&self, query: &str) -> Result<Vec<SkillMetadata>, HubError> {
+        let path = if query.is_empty() {
+            "/skills".to_string()
+        } else {
+            format!("/skills?search={}", urlencoding::encode(query))
+        };
+        
+        let req = self.build_request(reqwest::Method::GET, &path);
         
         let resp = req
             .send()

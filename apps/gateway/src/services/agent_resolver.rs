@@ -233,7 +233,7 @@ impl AgentResolver {
             model: "kimi-k2.5".to_string(),
             api_key: None,
             temperature: 0.7,
-            max_tokens: 2000,
+            max_tokens: 800,
         };
         let agent_config = gateway::AgentConfigBuilder::new(&agent_id, &agent_name)
             .description("Auto-created default agent for incoming messages")
@@ -249,14 +249,15 @@ impl AgentResolver {
             }
         })?;
 
-        // Bind to channel if binding store exists (LEGACY — deprecated)
-        if let Some(ref binding_store) = self.channel_binding_store {
-            if let Err(e) = binding_store.bind(&platform_str, channel_id, &agent_id).await {
-                warn!("Failed to bind auto-created agent {} to {}:{} via LEGACY store: {}", agent_id, platform_str, channel_id, e);
-            } else {
-                info!("Bound auto-created agent {} to {}:{} (LEGACY store — consider migrating)", agent_id, platform_str, channel_id);
-            }
-        }
+        // 🟢 P1 FIX: Skip LEGACY binding — new system now fully handles agent-channel binding.
+        // LEGACY ChannelBindingStore binding is deprecated and removed to prevent duplicate
+        // binding records and misleading migration warnings.
+        //
+        // if let Some(ref binding_store) = self.channel_binding_store {
+        //     if let Err(e) = binding_store.bind(&platform_str, channel_id, &agent_id).await {
+        //         warn!("Failed to bind auto-created agent ...");
+        //     }
+        // }
 
         // P1 FIX: Auto-create user_channel and bind via new system
         if let (Some(ref user_ch_svc), Some(ref agent_ch_svc)) =
@@ -288,7 +289,7 @@ impl AgentResolver {
 
             let uc_binding = UserChannelBinding {
                 id: uuid::Uuid::new_v4().to_string(),
-                user_id: "system".to_string(),
+                user_id: user_id.to_string(),
                 platform: platform_type,
                 instance_name: format!("{}_auto", platform_str),
                 platform_user_id: Some(channel_id.to_string()),

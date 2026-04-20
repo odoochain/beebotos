@@ -1,4 +1,4 @@
-# Skill: DevOps Engineer
+# DevOps Engineer
 
 ## Description
 

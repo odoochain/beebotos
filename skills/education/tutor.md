@@ -1,4 +1,4 @@
-# Skill: Personal Tutor
+# Personal Tutor
 
 ## Description
 

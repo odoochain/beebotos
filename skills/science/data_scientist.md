@@ -1,4 +1,4 @@
-# Skill: Data Scientist
+# Data Scientist
 
 ## Description
 

@@ -244,16 +244,17 @@ async fn fetch_dashboard_stats(client: crate::api::ApiClient) -> Result<Dashboar
     match (agents_result, dao_result) {
         (Ok(agents), Ok(dao_summary)) => {
             // Calculate stats from real data
-            let total_agents = agents.len() as u32;
-            let total_tasks: u32 = agents.iter().map(|a| a.task_count.unwrap_or(0)).sum();
-            let uptime_percent = if agents.is_empty() {
+            let agent_list = agents.data;
+            let total_agents = agent_list.len() as u32;
+            let total_tasks: u32 = agent_list.iter().map(|a| a.task_count.unwrap_or(0)).sum();
+            let uptime_percent = if agent_list.is_empty() {
                 100.0
             } else {
-                agents
+                agent_list
                     .iter()
                     .map(|a| a.uptime_percent.unwrap_or(100.0))
                     .sum::<f64>()
-                    / agents.len() as f64
+                    / agent_list.len() as f64
             };
 
             Ok(DashboardStatsData {

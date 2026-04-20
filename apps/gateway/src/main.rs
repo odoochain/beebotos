@@ -34,12 +34,14 @@ use uuid;
 // Business logic modules
 mod auth;
 mod capability;
-mod clients;
+pub mod clients;
 mod color_theme;
 mod config;
+mod config_center_integration;
 mod config_wizard;
 mod error;
-mod handlers;
+mod grpc;
+pub mod handlers;
 mod health;
 mod message_bus;
 mod middleware;
@@ -156,6 +158,10 @@ pub struct AppState {
     pub llm_service: Arc<crate::services::llm_service::LlmService>,
     /// Skill registry for skill management
     pub skill_registry: Option<Arc<beebotos_agents::skills::SkillRegistry>>,
+    /// Skill executor for WASM skill execution (cached to avoid recreating WasmEngine)
+    pub skill_executor: Option<Arc<beebotos_agents::skills::SkillExecutor>>,
+    /// Skill instance manager for instance-based execution model
+    pub skill_instance_manager: Option<Arc<beebotos_agents::skills::InstanceManager>>,
     /// Message processor for channel events
     pub message_processor: Option<Arc<MessageProcessor>>,
     /// Agent resolver for mapping channels/users to agents
@@ -168,6 +174,8 @@ pub struct AppState {
     pub memory_system: Option<Arc<beebotos_agents::memory::UnifiedMemorySystem>>,
     /// Authentication service
     pub auth_service: Option<Arc<crate::services::AuthService>>,
+    /// Config manager for hot-reload
+    pub config_manager: Option<Arc<crate::config_center_integration::GatewayConfigManager>>,
 }
 
 impl AppState {
@@ -236,6 +244,13 @@ impl AppState {
             Some(Arc::new(svc))
         };
 
+        // Initialize ConfigManager for hot-reload
+        let config_manager = {
+            let mgr = crate::config_center_integration::GatewayConfigManager::new(config.clone());
+            info!("✅ ConfigManager initialized");
+            Some(Arc::new(mgr))
+        };
+
         // Initialize LLM service first (needed by AgentRuntime)
         let llm_service = match crate::services::llm_service::LlmService::new(config.clone()).await {
             Ok(service) => {
@@ -257,12 +272,20 @@ impl AppState {
         };
         let llm_interface: Arc<dyn beebotos_agents::communication::LLMCallInterface> =
             Arc::new(crate::services::agent_runtime_manager::GatewayLLMInterface::new(llm_service.clone()));
+
+        // 🟢 P0 FIX: Initialize SkillRegistry **before** AgentRuntime so it can be injected
+        let skill_registry = Arc::new(beebotos_agents::skills::SkillRegistry::new());
+        info!("✅ SkillRegistry initialized");
+        restore_skills_from_disk(&skill_registry).await;
+        register_builtin_skills(&skill_registry).await;
+
         let agent_runtime: Arc<dyn gateway::AgentRuntime> = Arc::new(
             GatewayAgentRuntime::new(Some(kernel.clone()), Some(llm_interface), agent_runtime_config, Some(db.clone()))
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to initialize AgentRuntime: {}", e))?
+                .with_skill_registry(skill_registry.clone())
         );
-        info!("✅ AgentRuntime (trait-based) initialized");
+        info!("✅ AgentRuntime (trait-based) initialized with SkillRegistry");
 
         // Legacy: Agent runtime manager bridges gateway with beebotos_agents
         let agent_runtime_manager = Arc::new(
@@ -271,6 +294,7 @@ impl AppState {
                 config.clone(),
                 llm_service.clone(),
                 memory_system.clone(),
+                Some(skill_registry.clone()),
             )
             .await
             .map_err(|e| anyhow::anyhow!("Failed to initialize AgentRuntimeManager: {}", e))?
@@ -393,9 +417,21 @@ impl AppState {
             None
         };
 
-        // Initialize SkillRegistry
-        let skill_registry = Arc::new(beebotos_agents::skills::SkillRegistry::new());
-        info!("✅ SkillRegistry initialized");
+        // Initialize SkillExecutor
+        let skill_executor = match beebotos_agents::skills::SkillExecutor::new() {
+            Ok(executor) => {
+                info!("✅ SkillExecutor initialized");
+                Some(Arc::new(executor))
+            }
+            Err(e) => {
+                warn!("⚠️ Failed to initialize SkillExecutor: {}", e);
+                None
+            }
+        };
+
+        // Initialize SkillInstanceManager
+        let skill_instance_manager = Arc::new(beebotos_agents::skills::InstanceManager::new());
+        info!("✅ SkillInstanceManager initialized");
 
         // Initialize channel binding store (LEGACY — deprecated)
         // P2 OPTIMIZE: This is the old single-binding system. New code should use
@@ -443,12 +479,15 @@ impl AppState {
             kernel,
             llm_service,
             skill_registry: Some(skill_registry),
+            skill_executor,
+            skill_instance_manager: Some(skill_instance_manager),
             message_processor: None,
             agent_resolver: Some(agent_resolver),
             channel_binding_store: Some(channel_binding_store),
             webchat_service,
             memory_system,
             auth_service,
+            config_manager,
         })
     }
 }
@@ -649,6 +688,7 @@ async fn main() -> anyhow::Result<()> {
             registry.clone(),
             app_state.memory_system.clone(),
             app_state.webchat_service.clone(),
+            app_state.skill_registry.clone(),
         )));
     }
     let app_state = Arc::new(app_state);
@@ -775,6 +815,30 @@ async fn main() -> anyhow::Result<()> {
     } else {
         start_http_server(app, addr).await?;
     }
+
+    // Start gRPC server for skill registry and instance management
+    let grpc_addr = std::net::SocketAddr::from((
+        std::net::IpAddr::from_str(&app_config.server.host)
+            .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0))),
+        app_config.server.grpc_port,
+    ));
+    let grpc_service = grpc::skills::SkillsGrpcService::new(
+        app_state.skill_registry.clone(),
+        app_state.skill_instance_manager.clone(),
+        app_state.skill_executor.clone(),
+        handlers::http::skills::get_skills_base_dir(),
+    )
+    .with_rating_store(app_state.db.clone());
+    tokio::spawn(async move {
+        info!("🚀 Starting gRPC SkillRegistry server on {}", grpc_addr);
+        if let Err(e) = tonic::transport::Server::builder()
+            .add_service(grpc_service.into_server())
+            .serve(grpc_addr)
+            .await
+        {
+            error!("❌ gRPC server error: {}", e);
+        }
+    });
 
     // Graceful shutdown
     shutdown_signal().await;
@@ -945,6 +1009,52 @@ async fn init_channel_registry(
     }
 }
 
+/// Scan skills directory and load installed skills into registry
+async fn restore_skills_from_disk(registry: &Arc<beebotos_agents::skills::SkillRegistry>) {
+    let base_dir = handlers::http::skills::get_skills_base_dir();
+    if !base_dir.exists() {
+        return;
+    }
+
+    let mut loader = beebotos_agents::skills::SkillLoader::new();
+    loader.add_path(&base_dir);
+
+    let mut restored = 0;
+    if let Ok(mut entries) = tokio::fs::read_dir(&base_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let skill_id = match path.file_name().and_then(|n| n.to_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            match loader.load_skill(&skill_id).await {
+                Ok(skill) => {
+                    let category = "general".to_string();
+                    registry.register(skill, category, vec![]).await;
+                    restored += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to restore skill {}: {}", skill_id, e);
+                }
+            }
+        }
+    }
+
+    if restored > 0 {
+        info!("✅ Restored {} skills from disk", restored);
+    }
+}
+
+/// Scan project skills/ directory and register markdown-defined skills as lightweight builtins.
+/// Delegates to the shared loader in beebotos-agents to keep behaviour in sync.
+async fn register_builtin_skills(registry: &Arc<beebotos_agents::skills::SkillRegistry>) {
+    beebotos_agents::skills::builtin_loader::load_builtin_skills(registry).await;
+}
+
 /// Initialize database connection pool with retry logic
 /// 
 /// REL-002: Implements connection retry with exponential backoff
@@ -1108,7 +1218,27 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/agents", get(agents::list_agents))
         .route("/api/v1/agents", post(agents::create_agent))
         .route("/api/v1/agents/:id", get(agents::get_agent))
+        .route("/api/v1/agents/:id", put(agents::update_agent))
         .route("/api/v1/agents/:id", delete(agents::delete_agent))
+        .route("/api/v1/agents/:id/logs", get(handlers::http::agent_logs::get_agent_logs))
+        // Browser Automation API
+        .route("/api/v1/browser/status", get(handlers::http::browser::get_status))
+        .route("/api/v1/browser/profiles", get(handlers::http::browser::list_profiles))
+        .route("/api/v1/browser/profiles", post(handlers::http::browser::create_profile))
+        .route("/api/v1/browser/profiles/:id", delete(handlers::http::browser::delete_profile))
+        .route("/api/v1/browser/connect", post(handlers::http::browser::connect))
+        .route("/api/v1/browser/disconnect", post(handlers::http::browser::disconnect))
+        .route("/api/v1/browser/navigate", post(handlers::http::browser::navigate))
+        .route("/api/v1/browser/evaluate", post(handlers::http::browser::evaluate))
+        .route("/api/v1/browser/screenshot", post(handlers::http::browser::screenshot))
+        .route("/api/v1/browser/batch", post(handlers::http::browser::execute_batch))
+        .route("/api/v1/browser/sandboxes", get(handlers::http::browser::list_sandboxes))
+        .route("/api/v1/browser/sandboxes", post(handlers::http::browser::create_sandbox))
+        .route("/api/v1/browser/sandboxes/:id", delete(handlers::http::browser::delete_sandbox))
+        .route("/api/v1/browser/sandboxes/:id/stats", get(handlers::http::browser::get_sandbox_stats))
+        // Admin Config API
+        .route("/api/v1/admin/config", get(handlers::http::admin_config::get_config))
+        .route("/api/v1/admin/config/reload", post(handlers::http::admin_config::reload_config))
         .route("/api/v1/agents/:id/start", post(agents::start_agent))
         .route("/api/v1/agents/:id/stop", post(agents::stop_agent))
         .route("/api/v1/agents/:id/tasks", post(agents::execute_agent_task))
@@ -1136,6 +1266,7 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/chain/agents/:id/identity", post(handlers::http::chain::register_agent_identity))
         .route("/api/v1/chain/agents/:id/identity", get(handlers::http::chain::get_agent_identity))
         .route("/api/v1/chain/agents/:id/has-identity", get(handlers::http::chain::has_agent_identity))
+        .route("/api/v1/chain/dao/summary", get(handlers::http::chain::get_dao_summary))
         .route("/api/v1/chain/dao/proposals", get(handlers::http::chain::list_proposals))
         .route("/api/v1/chain/dao/proposals", post(handlers::http::chain::create_dao_proposal))
         .route("/api/v1/chain/dao/proposals/:id", get(handlers::http::chain::get_proposal))
@@ -1144,6 +1275,9 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         // Wallet endpoints
         .route("/api/v2/chain/wallet", get(handlers::http::chain_v2::get_wallet_info))
         .route("/api/v2/chain/wallet/transfer", post(handlers::http::chain_v2::transfer))
+        // Treasury API
+        .route("/api/v1/treasury", get(handlers::http::treasury::get_treasury))
+        .route("/api/v1/treasury/transfer", post(handlers::http::treasury::transfer))
         // Identity endpoints
         .route("/api/v2/chain/agents/:id/identity", post(handlers::http::chain_v2::register_agent_identity))
         .route("/api/v2/chain/agents/:id/identity", get(handlers::http::chain_v2::get_agent_identity))
@@ -1172,6 +1306,7 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/tasks/fault-detection", get(handlers::http::task_monitor::get_fault_detection_status))
         // LLM Metrics API
         .route("/api/v1/llm/metrics", get(handlers::http::llm_metrics::get_llm_metrics))
+        .route("/api/v1/llm/config", get(handlers::http::llm_config::get_llm_global_config))
         .route("/api/v1/llm/health", get(handlers::http::llm_metrics::get_llm_health))
         // Skills API
         .route("/api/v1/skills", get(handlers::http::skills::list_skills))
@@ -1180,9 +1315,19 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/skills/:id/uninstall", delete(handlers::http::skills::uninstall_skill))
         .route("/api/v1/skills/:id/execute", post(handlers::http::skills::execute_skill))
         .route("/api/v1/skills/hub/health", get(handlers::http::skills::hub_health))
+        // Instance-based skill execution
+        .route("/api/v1/instances", post(handlers::http::skills::create_instance))
+        .route("/api/v1/instances", get(handlers::http::skills::list_instances))
+        .route("/api/v1/instances/:id", get(handlers::http::skills::get_instance))
+        .route("/api/v1/instances/:id", put(handlers::http::skills::update_instance))
+        .route("/api/v1/instances/:id", delete(handlers::http::skills::delete_instance))
+        .route("/api/v1/instances/:id/execute", post(handlers::http::skills::execute_instance))
         // Auth routes (protected)
         .route("/api/v1/auth/logout", post(handlers::http::auth::logout))
         .route("/api/v1/auth/me", get(handlers::http::auth::me))
+        // User Settings
+        .route("/api/v1/user/settings", get(handlers::http::user_settings::get_user_settings))
+        .route("/api/v1/user/settings", put(handlers::http::user_settings::update_user_settings))
         // Webchat routes
         .route("/api/v1/webchat/sessions", get(handlers::http::webchat::list_sessions))
         .route("/api/v1/webchat/sessions", post(handlers::http::webchat::create_session))
@@ -1191,9 +1336,18 @@ fn create_router(app_state: Arc<AppState>, gateway_state: Arc<GatewayState>) -> 
         .route("/api/v1/webchat/sessions/:id/title", put(handlers::http::webchat::update_title))
         .route("/api/v1/webchat/sessions/:id/pin", post(handlers::http::webchat::toggle_pin))
         .route("/api/v1/webchat/sessions/:id/archive", post(handlers::http::webchat::archive_session))
+        .route("/api/v1/webchat/sessions/:id/clear", post(handlers::http::webchat::clear_messages))
+        .route("/api/v1/webchat/sessions/:id/export", get(handlers::http::webchat::export_session))
+        .route("/api/v1/webchat/sessions/import", post(handlers::http::webchat::import_session))
+        .route("/api/v1/webchat/sessions/:id/messages/stream", post(handlers::http::webchat::send_message_streaming))
+        .route("/api/v1/webchat/usage", get(handlers::http::webchat::get_usage))
+        .route("/api/v1/webchat/side-questions", post(handlers::http::webchat::create_side_question))
         // Channel routes
         .route("/api/v1/channels", get(handlers::http::channels::list_channels))
         .route("/api/v1/channels/:id", get(handlers::http::channels::get_channel))
+        .route("/api/v1/channels/:id", put(handlers::http::channels::update_channel))
+        .route("/api/v1/channels/:id/enable", post(handlers::http::channels::set_channel_enabled))
+        .route("/api/v1/channels/:id/test", post(handlers::http::channels::test_channel_connection))
         .route("/api/v1/channels/wechat/qr", post(handlers::http::channels::get_wechat_qr))
         .route("/api/v1/channels/wechat/qr/check", post(handlers::http::channels::check_wechat_qr))
         .route("/api/v1/channels/webchat/messages", post(handlers::http::channels::send_webchat_message))
@@ -1413,6 +1567,7 @@ mod tests {
             server: config::ServerConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
+                grpc_port: 50051,
                 timeout_seconds: 30,
                 max_body_size_mb: 10,
                 cors: config::CorsConfig {
@@ -1440,6 +1595,7 @@ mod tests {
             models: config::ModelsConfig {
                 default_provider: "kimi".to_string(),
                 fallback_chain: vec!["openai".to_string()],
+                request_timeout: 60,
                 cost_optimization: false,
                 max_tokens: 4096,
                 system_prompt: "You are a helpful assistant.".to_string(),
@@ -1557,5 +1713,120 @@ mod tests {
         let gateway_state = Arc::new(GatewayState::new(gateway_config, rate_limiter));
 
         let _router = create_router(app_state, gateway_state);
+    }
+
+    // ------------------------------------------------------------------
+    // ClawHub 客户端测试
+    // ------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_clawhub_client_creation_with_config() {
+        let client = clients::ClawHubClient::with_config(
+            "https://custom.hub.dev/v1".to_string(),
+            Some("test-api-key".to_string()),
+        );
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_clawhub_client_creation_without_api_key() {
+        let client = clients::ClawHubClient::with_config(
+            "https://open.hub.dev".to_string(),
+            None,
+        );
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_clawhub_get_skill_network_error() {
+        let client = clients::ClawHubClient::with_config(
+            "http://127.0.0.1:59999/v1".to_string(),
+            None,
+        )
+        .expect("创建客户端失败");
+
+        let result = client.get_skill("nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_clawhub_download_skill_network_error() {
+        let client = clients::ClawHubClient::with_config(
+            "http://127.0.0.1:59999/v1".to_string(),
+            None,
+        )
+        .expect("创建客户端失败");
+
+        let result = client.download_skill("test-skill", None).await;
+        assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Skill 目录工具函数测试
+    // ------------------------------------------------------------------
+    #[test]
+    fn test_skills_base_dir_default() {
+        let base = handlers::http::skills::get_skills_base_dir();
+        assert_eq!(base, std::path::PathBuf::from("data/skills"));
+    }
+
+    #[test]
+    fn test_skill_install_path_construction() {
+        let path = handlers::http::skills::get_skill_install_path("my-awesome-skill");
+        assert!(path.to_string_lossy().contains("my-awesome-skill"));
+        assert!(path.to_string_lossy().contains("data/skills"));
+    }
+
+    #[tokio::test]
+    async fn test_extract_and_load_skill() {
+        use std::io::Write;
+        let skill_id = "e2e-test-skill";
+
+        // 构造 ZIP
+        let mut zip_buf = Vec::new();
+        {
+            let mut zip = zip::write::ZipWriter::new(std::io::Cursor::new(&mut zip_buf));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            let manifest = format!(
+                r#"id: {id}
+name: {id}
+version: 1.0.0
+description: E2E test skill
+author: e2e-test
+license: MIT
+capabilities: []
+permissions: []
+entry_point: handle
+"#,
+                id = skill_id
+            );
+            zip.start_file("skill.yaml", options).unwrap();
+            zip.write_all(manifest.as_bytes()).unwrap();
+
+            zip.start_file("skill.wasm", options).unwrap();
+            zip.write_all(b"\0asm\x01\0\0\0").unwrap();
+
+            zip.finish().unwrap();
+        }
+
+        // 解压到临时目录
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join(skill_id);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let cursor = std::io::Cursor::new(&zip_buf);
+        let mut archive = zip::ZipArchive::new(cursor).expect("读取 ZIP 失败");
+        archive.extract(&skill_dir).expect("解压 ZIP 失败");
+
+        assert!(skill_dir.join("skill.yaml").exists());
+        assert!(skill_dir.join("skill.wasm").exists());
+
+        // SkillLoader 加载
+        let mut loader = beebotos_agents::skills::SkillLoader::new();
+        loader.add_path(tmp.path());
+        let loaded = loader.load_skill(skill_id).await.expect("加载 skill 失败");
+
+        assert_eq!(loaded.id, skill_id);
+        assert_eq!(loaded.manifest.version.to_string(), "1.0.0");
     }
 }

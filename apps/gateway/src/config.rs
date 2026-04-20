@@ -56,6 +56,8 @@ pub struct ServerConfig {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_grpc_port")]
+    pub grpc_port: u16,
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
     #[serde(default = "default_max_body_size_mb")]
@@ -127,6 +129,7 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            grpc_port: default_grpc_port(),
             timeout_seconds: default_timeout_seconds(),
             max_body_size_mb: default_max_body_size_mb(),
             cors: CorsConfig::default(),
@@ -159,6 +162,7 @@ fn default_cooldown_seconds() -> u64 { 60 }
 fn default_default_provider() -> String { "kimi".to_string() }
 fn default_max_tokens() -> u32 { 4096 }
 fn default_system_prompt() -> String { "You are a helpful assistant.".to_string() }
+fn default_request_timeout() -> u64 { 60 }
 fn default_media_storage_path() -> String { "./data/media".to_string() }
 fn default_max_file_size_mb() -> u32 { 50 }
 fn default_context_window_size() -> usize { 20 }
@@ -176,6 +180,7 @@ fn default_issuer() -> String { "beebotos-gateway".to_string() }
 fn default_audience() -> String { "beebotos-api".to_string() }
 fn default_host() -> String { "0.0.0.0".to_string() }
 fn default_port() -> u16 { 8080 }
+fn default_grpc_port() -> u16 { 50051 }
 fn default_timeout_seconds() -> u64 { 30 }
 fn default_max_body_size_mb() -> usize { 10 }
 fn default_allowed_origins() -> Vec<String> { vec!["*".to_string()] }
@@ -240,6 +245,8 @@ pub struct ModelsConfig {
     pub max_tokens: u32,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout: u64,
     #[serde(flatten)]
     pub providers: HashMap<String, ModelProviderConfig>,
 }
@@ -761,6 +768,7 @@ mod tests {
             server: ServerConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
+                grpc_port: 50051,
                 timeout_seconds: 30,
                 max_body_size_mb: 10,
                 cors: CorsConfig {
@@ -788,6 +796,7 @@ mod tests {
             models: ModelsConfig {
                 default_provider: "kimi".to_string(),
                 fallback_chain: vec!["openai".to_string()],
+                request_timeout: default_request_timeout(),
                 cost_optimization: false,
                 max_tokens: 4096,
                 system_prompt: "You are a helpful assistant.".to_string(),

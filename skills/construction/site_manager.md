@@ -1,4 +1,4 @@
-# Skill: Construction Site Manager
+# Construction Site Manager
 
 ## Description
 

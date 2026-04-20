@@ -1,4 +1,4 @@
-# Solidity Developer Skill
+# Solidity Developer
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Skill: Grid Optimizer
+# Grid Optimizer
 
 ## Description
 

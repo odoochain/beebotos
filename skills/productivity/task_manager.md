@@ -1,4 +1,4 @@
-# Task Manager Skill
+# Task Manager
 
 ## Overview
 

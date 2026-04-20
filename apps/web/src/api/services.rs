@@ -1,7 +1,9 @@
 //! API Service implementations using the advanced ApiClient
 
 use super::client::{ApiClient, ApiError};
+use super::gateway::ApiEndpoints;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 /// API Service trait
 pub trait ApiService {
@@ -19,46 +21,54 @@ impl AgentService {
         Self { client }
     }
 
-    pub async fn list(&self) -> Result<Vec<AgentInfo>, ApiError> {
-        self.client.get("/agents").await
+    pub async fn list(&self) -> Result<PaginatedResponse<AgentInfo>, ApiError> {
+        self.client.get(ApiEndpoints::AGENTS).await
+    }
+
+    pub async fn list_paginated(&self, page: usize, per_page: usize) -> Result<PaginatedResponse<AgentInfo>, ApiError> {
+        self.client.get(&format!("{}?page={}&per_page={}", ApiEndpoints::AGENTS, page, per_page)).await
     }
 
     pub async fn get(&self, id: &str) -> Result<AgentInfo, ApiError> {
-        self.client.get(&format!("/agents/{}", id)).await
+        self.client.get(&format!("{}{}", ApiEndpoints::AGENT_DETAIL, id)).await
+    }
+
+    pub async fn get_logs(&self, id: &str) -> Result<Vec<AgentLogEntry>, ApiError> {
+        self.client.get(&format!("{}{}/logs", ApiEndpoints::AGENT_DETAIL, id)).await
     }
 
     pub async fn create(&self, req: CreateAgentRequest) -> Result<AgentInfo, ApiError> {
-        self.client.post("/agents", &req).await
+        self.client.post(ApiEndpoints::AGENTS, &req).await
     }
 
     pub async fn update(&self, id: &str, req: UpdateAgentRequest) -> Result<AgentInfo, ApiError> {
-        self.client.put(&format!("/agents/{}", id), &req).await
+        self.client.put(&format!("{}{}", ApiEndpoints::AGENT_DETAIL, id), &req).await
     }
 
     pub async fn delete(&self, id: &str) -> Result<(), ApiError> {
-        self.client.delete(&format!("/agents/{}", id)).await
+        self.client.delete(&format!("{}{}", ApiEndpoints::AGENT_DETAIL, id)).await
     }
 
-    pub async fn start(&self, id: &str) -> Result<(), ApiError> {
+    pub async fn start(&self, id: &str) -> Result<serde_json::Value, ApiError> {
         self.client
-            .post(&format!("/agents/{}/start", id), &serde_json::json!({}))
+            .post(&ApiEndpoints::AGENT_START.replace("{id}", id), &serde_json::json!({}))
             .await
     }
 
-    pub async fn stop(&self, id: &str) -> Result<(), ApiError> {
+    pub async fn stop(&self, id: &str) -> Result<serde_json::Value, ApiError> {
         self.client
-            .post(&format!("/agents/{}/stop", id), &serde_json::json!({}))
+            .post(&ApiEndpoints::AGENT_STOP.replace("{id}", id), &serde_json::json!({}))
             .await
     }
 
     /// Invalidate agent list cache
     pub fn invalidate_cache(&self) {
-        self.client.invalidate_cache("GET:/agents");
+        self.client.invalidate_cache(&format!("GET:{}", ApiEndpoints::AGENTS));
     }
 
     /// Invalidate specific agent cache
     pub fn invalidate_agent_cache(&self, id: &str) {
-        self.client.invalidate_cache(&format!("GET:/agents/{}", id));
+        self.client.invalidate_cache(&format!("GET:{}{}", ApiEndpoints::AGENT_DETAIL, id));
     }
 }
 
@@ -79,21 +89,55 @@ impl SkillService {
         Self { client }
     }
 
-    pub async fn list(&self) -> Result<Vec<SkillInfo>, ApiError> {
-        self.client.get("/skills").await
+    pub async fn list(&self, hub: Option<&str>, search: Option<&str>) -> Result<Vec<SkillInfo>, ApiError> {
+        let mut path = ApiEndpoints::SKILLS.to_string();
+        let mut params = Vec::new();
+        if let Some(h) = hub {
+            let encoded = js_sys::encode_uri_component(h);
+            params.push(format!("hub={}", encoded));
+        }
+        if let Some(s) = search {
+            let encoded = js_sys::encode_uri_component(s);
+            params.push(format!("search={}", encoded));
+        }
+        if !params.is_empty() {
+            path.push('?');
+            path.push_str(&params.join("&"));
+        }
+        self.client.get(&path).await
     }
 
-    pub async fn install(&self, skill_id: &str) -> Result<(), ApiError> {
-        self.client
-            .post(
-                &format!("/skills/{}/install", skill_id),
-                &serde_json::json!({}),
-            )
-            .await
+    pub async fn install(&self, req: InstallSkillRequest) -> Result<InstallSkillResponse, ApiError> {
+        self.client.post(ApiEndpoints::SKILL_INSTALL, &req).await
     }
 
     pub async fn uninstall(&self, skill_id: &str) -> Result<(), ApiError> {
-        self.client.delete(&format!("/skills/{}", skill_id)).await
+        self.client.delete(&ApiEndpoints::SKILL_UNINSTALL.replace("{id}", skill_id)).await
+    }
+
+    pub async fn execute(&self, skill_id: &str, input: serde_json::Value) -> Result<ExecuteSkillResponse, ApiError> {
+        self.client.post(&ApiEndpoints::SKILL_EXECUTE.replace("{id}", skill_id), &json!({ "input": input })).await
+    }
+
+    // Instance-based skill management
+    pub async fn list_instances(&self) -> Result<Vec<InstanceInfo>, ApiError> {
+        self.client.get(ApiEndpoints::INSTANCES).await
+    }
+
+    pub async fn get_instance(&self, instance_id: &str) -> Result<InstanceInfo, ApiError> {
+        self.client.get(&format!("{}{}", ApiEndpoints::INSTANCE_DETAIL, instance_id)).await
+    }
+
+    pub async fn create_instance(&self, req: CreateInstanceRequest) -> Result<InstanceInfo, ApiError> {
+        self.client.post(ApiEndpoints::INSTANCES, &req).await
+    }
+
+    pub async fn delete_instance(&self, instance_id: &str) -> Result<(), ApiError> {
+        self.client.delete(&format!("{}{}", ApiEndpoints::INSTANCE_DETAIL, instance_id)).await
+    }
+
+    pub async fn execute_instance(&self, instance_id: &str) -> Result<ExecuteSkillResponse, ApiError> {
+        self.client.post(&ApiEndpoints::INSTANCE_EXECUTE.replace("{id}", instance_id), &json!({})).await
     }
 }
 
@@ -115,29 +159,28 @@ impl DaoService {
     }
 
     pub async fn get_summary(&self) -> Result<DaoSummary, ApiError> {
-        self.client.get("/dao/summary").await
+        self.client.get("/chain/dao/summary").await
     }
 
     pub async fn list_proposals(&self) -> Result<Vec<ProposalInfo>, ApiError> {
-        self.client.get("/dao/proposals").await
+        self.client.get("/chain/dao/proposals").await
     }
 
     pub async fn get_proposal(&self, id: &str) -> Result<ProposalInfo, ApiError> {
-        self.client.get(&format!("/dao/proposals/{}", id)).await
+        self.client.get(&format!("/chain/dao/proposals/{}", id)).await
     }
 
     pub async fn vote(
         &self,
         proposal_id: &str,
         vote_for: bool,
-        voting_power: u64,
-    ) -> Result<(), ApiError> {
+        _voting_power: u64,
+    ) -> Result<serde_json::Value, ApiError> {
         self.client
             .post(
-                &format!("/dao/proposals/{}/vote", proposal_id),
+                &format!("/chain/dao/proposals/{}/vote", proposal_id),
                 &serde_json::json!({
-                    "vote_for": vote_for,
-                    "voting_power": voting_power
+                    "vote": if vote_for { "for" } else { "against" },
                 }),
             )
             .await
@@ -146,14 +189,14 @@ impl DaoService {
     pub async fn create_proposal(
         &self,
         req: CreateProposalRequest,
-    ) -> Result<ProposalInfo, ApiError> {
-        self.client.post("/dao/proposals", &req).await
+    ) -> Result<serde_json::Value, ApiError> {
+        self.client.post("/chain/dao/proposals", &req).await
     }
 
     /// Invalidate proposals cache after voting
     pub fn invalidate_proposals_cache(&self) {
-        self.client.invalidate_cache("GET:/dao/proposals");
-        self.client.invalidate_cache("GET:/dao/summary");
+        self.client.invalidate_cache("GET:/chain/dao/proposals");
+        self.client.invalidate_cache("GET:/chain/dao/summary");
     }
 }
 
@@ -177,6 +220,13 @@ impl TreasuryService {
     pub async fn get_info(&self) -> Result<TreasuryInfo, ApiError> {
         self.client.get("/treasury").await
     }
+
+    pub async fn transfer(&self, to: &str, amount: &str) -> Result<serde_json::Value, ApiError> {
+        self.client.post("/treasury/transfer", &serde_json::json!({
+            "to": to,
+            "amount": amount,
+        })).await
+    }
 }
 
 impl ApiService for TreasuryService {
@@ -197,11 +247,11 @@ impl SettingsService {
     }
 
     pub async fn get(&self) -> Result<Settings, ApiError> {
-        self.client.get("/settings").await
+        self.client.get("/user/settings").await
     }
 
-    pub async fn update(&self, settings: Settings) -> Result<Settings, ApiError> {
-        self.client.put("/settings", &settings).await
+    pub async fn update(&self, settings: &Settings) -> Result<serde_json::Value, ApiError> {
+        self.client.put("/user/settings", &settings).await
     }
 }
 
@@ -252,7 +302,7 @@ impl AuthService {
             .await
     }
 
-    pub async fn logout(&self) -> Result<(), ApiError> {
+    pub async fn logout(&self) -> Result<serde_json::Value, ApiError> {
         self.client
             .post("/auth/logout", &serde_json::json!({}))
             .await
@@ -305,12 +355,12 @@ impl ChannelService {
     }
 
     /// Update channel configuration
-    pub async fn update(&self, id: &str, config: ChannelConfig) -> Result<ChannelInfo, ApiError> {
+    pub async fn update(&self, id: &str, config: ChannelConfig) -> Result<serde_json::Value, ApiError> {
         self.client.put(&format!("/channels/{}", id), &config).await
     }
 
     /// Enable/disable channel
-    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<ChannelInfo, ApiError> {
+    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<serde_json::Value, ApiError> {
         self.client
             .post(&format!("/channels/{}/enable", id), &serde_json::json!({ "enabled": enabled }))
             .await
@@ -344,6 +394,49 @@ impl ApiService for ChannelService {
 
 // ==================== Data Models ====================
 
+/// Paginated response wrapper
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PaginatedResponse<T> {
+    pub data: Vec<T>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+    pub total_pages: i64,
+}
+
+/// LLM Global Configuration Service
+#[derive(Clone)]
+pub struct LlmConfigService {
+    client: ApiClient,
+}
+
+impl LlmConfigService {
+    pub fn new(client: ApiClient) -> Self {
+        Self { client }
+    }
+
+    /// Get global LLM configuration (read-only, masked API keys)
+    pub async fn get_config(&self) -> Result<LlmGlobalConfig, ApiError> {
+        self.client.get("/llm/config").await
+    }
+
+    /// Get LLM metrics
+    pub async fn get_metrics(&self) -> Result<LlmMetricsResponse, ApiError> {
+        self.client.get("/llm/metrics").await
+    }
+
+    /// Get LLM health status
+    pub async fn get_health(&self) -> Result<LlmHealthResponse, ApiError> {
+        self.client.get("/llm/health").await
+    }
+}
+
+impl ApiService for LlmConfigService {
+    fn client(&self) -> &ApiClient {
+        &self.client
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentInfo {
     pub id: String,
@@ -353,7 +446,9 @@ pub struct AgentInfo {
     pub capabilities: Vec<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    #[serde(default)]
     pub task_count: Option<u32>,
+    #[serde(default)]
     pub uptime_percent: Option<f64>,
 }
 
@@ -373,13 +468,22 @@ pub struct CreateAgentRequest {
     pub name: String,
     pub description: Option<String>,
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateAgentRequest {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub status: Option<String>,
     pub capabilities: Option<Vec<String>>,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub model_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -389,10 +493,77 @@ pub struct SkillInfo {
     pub description: String,
     pub version: String,
     pub author: String,
-    pub category: SkillCategory,
+    pub license: String,
     pub installed: bool,
+    pub capabilities: Vec<String>,
+    pub tags: Vec<String>,
+    #[serde(default)]
     pub downloads: u64,
+    #[serde(default)]
     pub rating: f32,
+}
+
+/// Install skill request (aligns with Gateway API)
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstallSkillRequest {
+    pub source: String,
+    pub agent_id: Option<String>,
+    pub version: Option<String>,
+    pub hub: Option<String>,
+}
+
+/// Install skill response
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstallSkillResponse {
+    pub success: bool,
+    pub skill_id: String,
+    pub name: String,
+    pub version: String,
+    pub message: String,
+    pub installed_path: String,
+}
+
+/// Execute skill response
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExecuteSkillResponse {
+    pub success: bool,
+    pub output: String,
+    pub execution_time_ms: u64,
+}
+
+/// Usage stats for an instance
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct UsageStats {
+    pub total_calls: u64,
+    pub successful_calls: u64,
+    pub failed_calls: u64,
+    pub avg_latency_ms: f64,
+}
+
+/// Instance info
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct InstanceInfo {
+    pub instance_id: String,
+    pub skill_id: String,
+    pub agent_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub config: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub started_at: i64,
+    #[serde(default)]
+    pub last_active: i64,
+    #[serde(default)]
+    pub usage: UsageStats,
+}
+
+/// Create instance request
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateInstanceRequest {
+    pub skill_id: String,
+    pub agent_id: String,
+    #[serde(default)]
+    pub config: std::collections::HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -423,11 +594,15 @@ pub struct ProposalInfo {
     pub title: String,
     pub description: String,
     pub status: ProposalStatus,
+    #[serde(default)]
     pub proposer: String,
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub ends_at: String,
     pub votes_for: u64,
     pub votes_against: u64,
+    #[serde(default)]
     pub user_voted: Option<bool>,
 }
 
@@ -445,11 +620,22 @@ pub enum ProposalStatus {
 pub struct CreateProposalRequest {
     pub title: String,
     pub description: String,
+    pub proposal_type: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentLogEntry {
+    pub id: i64,
+    pub agent_id: String,
+    pub level: String,
+    pub message: String,
+    pub source: Option<String>,
+    pub timestamp: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TreasuryInfo {
-    pub total_balance: u64,
+    pub total_balance: String,
     pub token_symbol: String,
     pub assets: Vec<AssetInfo>,
     pub recent_transactions: Vec<TransactionInfo>,
@@ -458,7 +644,7 @@ pub struct TreasuryInfo {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AssetInfo {
     pub token: String,
-    pub balance: u64,
+    pub balance: String,
     pub value_usd: f64,
 }
 
@@ -466,7 +652,7 @@ pub struct AssetInfo {
 pub struct TransactionInfo {
     pub id: String,
     pub tx_type: TransactionType,
-    pub amount: u64,
+    pub amount: String,
     pub token: String,
     pub from: String,
     pub to: String,
@@ -508,6 +694,76 @@ pub enum Theme {
     Dark,
     Light,
     System,
+}
+
+/// LLM Global Configuration
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmGlobalConfig {
+    pub default_provider: String,
+    pub fallback_chain: Vec<String>,
+    pub cost_optimization: bool,
+    pub max_tokens: u32,
+    pub system_prompt: String,
+    pub request_timeout: u64,
+    pub providers: Vec<LlmProviderConfig>,
+}
+
+/// LLM Provider Configuration (masked API key)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmProviderConfig {
+    pub name: String,
+    pub api_key_masked: String,
+    pub model: String,
+    pub base_url: String,
+    pub temperature: f32,
+    pub context_window: Option<u32>,
+}
+
+/// LLM Metrics Response
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmMetricsResponse {
+    pub summary: LlmSummary,
+    pub tokens: LlmTokens,
+    pub latency: LlmLatency,
+    pub providers: Vec<LlmProviderHealth>,
+    pub timestamp: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmSummary {
+    pub total_requests: u64,
+    pub successful_requests: u64,
+    pub failed_requests: u64,
+    pub success_rate_percent: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmTokens {
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmLatency {
+    pub average_ms: f64,
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmProviderHealth {
+    pub name: String,
+    pub healthy: bool,
+    pub consecutive_failures: u32,
+}
+
+/// LLM Health Response
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LlmHealthResponse {
+    pub status: String,
+    pub providers: Vec<LlmProviderHealth>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -580,6 +836,7 @@ pub struct ChannelConfig {
 pub struct TestConnectionResponse {
     pub success: bool,
     pub message: String,
+    #[serde(default)]
     pub latency_ms: Option<u64>,
 }
 
@@ -596,4 +853,193 @@ pub struct QrStatusResponse {
     pub bot_token: Option<String>,
     pub base_url: Option<String>,
     pub message: Option<String>,
+}
+
+#[cfg(test)]
+mod qa_tests {
+    use super::*;
+    use crate::api::gateway::ApiEndpoints;
+    use serde_json::json;
+
+    // ========== ApiEndpoints Path Validation ==========
+
+    #[test]
+    fn test_api_endpoints_agents() {
+        assert_eq!(ApiEndpoints::AGENTS, "/agents");
+        assert_eq!(ApiEndpoints::AGENT_DETAIL, "/agents/");
+        assert_eq!(ApiEndpoints::AGENT_START, "/agents/{id}/start");
+        assert_eq!(ApiEndpoints::AGENT_STOP, "/agents/{id}/stop");
+    }
+
+    #[test]
+    fn test_api_endpoints_skills() {
+        assert_eq!(ApiEndpoints::SKILLS, "/skills");
+        assert_eq!(ApiEndpoints::SKILL_INSTALL, "/skills/install");
+    }
+
+    #[test]
+    fn test_api_endpoints_instances() {
+        assert_eq!(ApiEndpoints::INSTANCES, "/instances");
+        assert_eq!(ApiEndpoints::INSTANCE_DETAIL, "/instances/");
+    }
+
+    // ========== Base URL + Path Concatenation ==========
+
+    #[test]
+    fn test_base_url_concatenation() {
+        let base = "/api/v1";
+        assert_eq!(format!("{}{}", base, ApiEndpoints::AGENTS), "/api/v1/agents");
+        assert_eq!(format!("{}{}", base, "/agents/123/logs"), "/api/v1/agents/123/logs");
+        assert_eq!(format!("{}{}", base, "/chain/dao/proposals"), "/api/v1/chain/dao/proposals");
+        assert_eq!(format!("{}{}", base, "/treasury"), "/api/v1/treasury");
+    }
+
+    // ========== Model Deserialization Compatibility ==========
+
+    #[test]
+    fn test_agent_info_deserialization() {
+        let json = json!({
+            "id": "agent-1",
+            "name": "Test Agent",
+            "description": "desc",
+            "status": "running",
+            "capabilities": ["read"],
+            "created_at": "2024-01-15T10:30:00Z",
+            "updated_at": "2024-01-15T10:30:00Z"
+        });
+        let agent: AgentInfo = serde_json::from_value(json).expect("AgentInfo should deserialize");
+        assert_eq!(agent.id, "agent-1");
+        assert_eq!(agent.status, AgentStatus::Running);
+        assert_eq!(agent.task_count, None); // #[serde(default)]
+    }
+
+    #[test]
+    fn test_proposal_info_deserialization() {
+        let json = json!({
+            "id": "prop-1",
+            "title": "Title",
+            "description": "Desc",
+            "status": "active",
+            "proposer": "0xabc",
+            "created_at": "2024-01-01",
+            "ends_at": "2024-01-10",
+            "votes_for": 10,
+            "votes_against": 2,
+            "user_voted": true
+        });
+        let prop: ProposalInfo = serde_json::from_value(json).expect("ProposalInfo should deserialize");
+        assert_eq!(prop.status, ProposalStatus::Active);
+        assert_eq!(prop.votes_for, 10);
+    }
+
+    #[test]
+    fn test_proposal_info_with_defaults() {
+        // Backend may omit some fields — verify #[serde(default)] works
+        let json = json!({
+            "id": "prop-2",
+            "title": "Title",
+            "description": "Desc",
+            "status": "pending",
+            "votes_for": 0,
+            "votes_against": 0
+        });
+        let prop: ProposalInfo = serde_json::from_value(json).expect("ProposalInfo with missing fields should deserialize");
+        assert_eq!(prop.proposer, "");
+        assert_eq!(prop.created_at, "");
+        assert_eq!(prop.user_voted, None);
+    }
+
+    #[test]
+    fn test_browser_instance_deserialization() {
+        let json = json!({
+            "id": "inst-1",
+            "profile_id": "prof-1",
+            "status": "connected",
+            "current_url": "https://example.com"
+        });
+        let inst: crate::browser::BrowserInstance = serde_json::from_value(json).expect("BrowserInstance should deserialize");
+        assert_eq!(inst.id, "inst-1");
+        assert_eq!(inst.status, crate::browser::ConnectionStatus::Connected);
+        assert_eq!(inst.page_title, None); // #[serde(default)]
+    }
+
+    #[test]
+    fn test_llm_health_response_deserialization() {
+        let json = json!({
+            "status": "healthy",
+            "providers": [
+                { "name": "openai", "healthy": true, "consecutive_failures": 0 }
+            ]
+        });
+        let health: LlmHealthResponse = serde_json::from_value(json).expect("LlmHealthResponse should deserialize");
+        assert_eq!(health.status, "healthy");
+        assert_eq!(health.providers.len(), 1);
+    }
+
+    #[test]
+    fn test_treasury_info_deserialization() {
+        let json = json!({
+            "total_balance": "1000",
+            "token_symbol": "ETH",
+            "assets": [
+                { "token": "ETH", "balance": "1000", "value_usd": 2000.0 }
+            ],
+            "recent_transactions": []
+        });
+        let info: TreasuryInfo = serde_json::from_value(json).expect("TreasuryInfo should deserialize");
+        assert_eq!(info.total_balance, "1000");
+    }
+
+    #[test]
+    fn test_settings_deserialization() {
+        let json = json!({
+            "theme": "dark",
+            "language": "en",
+            "notifications_enabled": true,
+            "auto_update": false
+        });
+        let settings: Settings = serde_json::from_value(json).expect("Settings should deserialize");
+        assert_eq!(settings.theme, Theme::Dark);
+    }
+
+    #[test]
+    fn test_channel_info_deserialization() {
+        let json = json!({
+            "id": "wechat",
+            "name": "微信",
+            "description": "WeChat",
+            "icon": "💬",
+            "enabled": true,
+            "status": "connected"
+        });
+        let ch: ChannelInfo = serde_json::from_value(json).expect("ChannelInfo should deserialize");
+        assert_eq!(ch.status, ChannelStatus::Connected);
+    }
+
+    #[test]
+    fn test_update_agent_request_serialization() {
+        let req = UpdateAgentRequest {
+            name: Some("New Name".to_string()),
+            description: None,
+            status: Some("running".to_string()),
+            capabilities: Some(vec!["read".to_string()]),
+            model_provider: Some("openai".to_string()),
+            model_name: Some("gpt-4".to_string()),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["name"], "New Name");
+        assert_eq!(json["status"], "running");
+        assert!(json["description"].is_null());
+    }
+
+    #[test]
+    fn test_create_proposal_request_serialization() {
+        let req = CreateProposalRequest {
+            title: "Test Proposal".to_string(),
+            description: "Description".to_string(),
+            proposal_type: "funding".to_string(),
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["proposal_type"], "funding");
+    }
 }

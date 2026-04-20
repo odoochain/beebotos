@@ -55,7 +55,7 @@ impl BrowserApiService {
     }
 
     /// 断开浏览器连接
-    pub async fn disconnect(&self, instance_id: &str) -> Result<(), ApiError> {
+    pub async fn disconnect(&self, instance_id: &str) -> Result<serde_json::Value, ApiError> {
         self.client
             .post(
                 "/browser/disconnect",

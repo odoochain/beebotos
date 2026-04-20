@@ -415,7 +415,7 @@ impl Default for AgentRuntimeBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Artifact, MemoryConfig, ModelConfig, PersonalityConfig};
+    use crate::{MemoryConfig, ModelConfig, PersonalityConfig};
 
     fn create_test_agent_config() -> AgentConfig {
         AgentConfig {

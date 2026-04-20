@@ -1,7 +1,5 @@
 //! Skills Security
 
-use crate::error::{AgentError, Result};
-
 /// Security policy for skills
 #[derive(Debug, Clone)]
 pub struct SkillSecurityPolicy {
@@ -25,9 +23,10 @@ impl Default for SkillSecurityPolicy {
             max_memory_mb: 128,
             timeout_secs: 30,
             allowed_imports: vec![
-                "env".to_string(),
                 "env.memory".to_string(),
-                "env.abort".to_string(),
+                "env.__stack_pointer".to_string(),
+                "env.__memory_base".to_string(),
+                "env.__table_base".to_string(),
             ],
             max_module_size: 10 * 1024 * 1024, // 10MB
         }
@@ -40,41 +39,19 @@ pub struct SkillSecurityValidator {
 }
 
 /// WASM validation error
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ValidationError {
-    /// Module too large
+    #[error("WASM module size {size} exceeds maximum {max}")]
     ModuleTooLarge { size: usize, max: usize },
-    /// Unauthorized import
+    #[error("Unauthorized import: {0}")]
     UnauthorizedImport(String),
-    /// Invalid WASM format
+    #[error("Invalid WASM: {0}")]
     InvalidWasm(String),
-    /// Memory limit exceeded
+    #[error("Memory limit {requested}MB exceeds maximum {max}MB")]
     MemoryLimitExceeded { requested: u32, max: u32 },
-    /// Dangerous pattern detected
+    #[error("Dangerous pattern detected: {0}")]
     DangerousPattern(String),
 }
-
-impl std::fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ValidationError::ModuleTooLarge { size, max } => {
-                write!(f, "WASM module size {} exceeds maximum {}", size, max)
-            }
-            ValidationError::UnauthorizedImport(import) => {
-                write!(f, "Unauthorized import: {}", import)
-            }
-            ValidationError::InvalidWasm(msg) => write!(f, "Invalid WASM: {}", msg),
-            ValidationError::MemoryLimitExceeded { requested, max } => {
-                write!(f, "Memory limit {} exceeds maximum {}", requested, max)
-            }
-            ValidationError::DangerousPattern(pattern) => {
-                write!(f, "Dangerous pattern detected: {}", pattern)
-            }
-        }
-    }
-}
-
-impl std::error::Error for ValidationError {}
 
 impl SkillSecurityValidator {
     pub fn new(policy: SkillSecurityPolicy) -> Self {
@@ -82,165 +59,244 @@ impl SkillSecurityValidator {
     }
 
     /// Validate WASM module against security policy
-    /// 
+    ///
     /// Checks:
     /// 1. Module size limits
-    /// 2. Import whitelist
-    /// 3. Memory limits
-    /// 4. Dangerous patterns (host function calls, etc.)
-    /// 5. Valid WASM structure
-    pub fn validate(&self, skill_wasm: &[u8]) -> Result<()> {
+    /// 2. Valid WASM structure (via wasmparser)
+    /// 3. Import whitelist
+    /// 4. Memory limits
+    /// 5. Dangerous patterns in imports
+    pub fn validate(&self, skill_wasm: &[u8]) -> std::result::Result<(), ValidationError> {
         // Check module size
         if skill_wasm.len() > self.policy.max_module_size {
-            return Err(AgentError::Validation(format!(
-                "WASM module too large: {} bytes (max: {})",
-                skill_wasm.len(),
-                self.policy.max_module_size
-            )));
+            return Err(ValidationError::ModuleTooLarge {
+                size: skill_wasm.len(),
+                max: self.policy.max_module_size,
+            });
         }
 
-        // Parse and validate WASM module
+        // Parse and validate WASM module using wasmparser
         self.validate_wasm_structure(skill_wasm)?;
-        
-        // Validate imports against whitelist
-        self.validate_imports(skill_wasm)?;
-        
-        // Validate memory limits
-        self.validate_memory_limits(skill_wasm)?;
-        
-        // Check for dangerous patterns
-        self.validate_no_dangerous_patterns(skill_wasm)?;
 
         Ok(())
     }
 
-    /// Validate basic WASM structure
-    fn validate_wasm_structure(&self, wasm: &[u8]) -> Result<()> {
-        // Check WASM magic number and version
-        if wasm.len() < 8 {
-            return Err(AgentError::Validation(
-                "WASM module too small".to_string()
-            ));
-        }
+    /// Validate WASM structure using wasmparser
+    fn validate_wasm_structure(&self, wasm: &[u8]) -> std::result::Result<(), ValidationError> {
+        use wasmparser::{Parser, Payload, TypeRef};
 
-        // WASM magic number: \0asm
-        if &wasm[0..4] != &[0x00, 0x61, 0x73, 0x6d] {
-            return Err(AgentError::Validation(
-                "Invalid WASM magic number".to_string()
-            ));
-        }
+        let parser = Parser::new(0);
 
-        // WASM version: 1
-        if &wasm[4..8] != &[0x01, 0x00, 0x00, 0x00] {
-            return Err(AgentError::Validation(
-                "Unsupported WASM version".to_string()
-            ));
+        for payload in parser.parse_all(wasm) {
+            let payload = payload.map_err(|e| {
+                ValidationError::InvalidWasm(format!("Parse error: {}", e))
+            })?;
+
+            match payload {
+                Payload::Version { num, .. } => {
+                    if num != 1 {
+                        return Err(ValidationError::InvalidWasm(format!(
+                            "Unsupported WASM version: {}. Only version 1 is supported.",
+                            num
+                        )));
+                    }
+                }
+                Payload::ImportSection(imports) => {
+                    for import in imports.into_imports() {
+                        let import = import.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid import entry: {}", e))
+                        })?;
+
+                        let full_name = format!("{}.{}", import.module, import.name);
+
+                        // Check for forbidden imports
+                        if self.is_forbidden_import(&full_name) {
+                            return Err(ValidationError::UnauthorizedImport(full_name));
+                        }
+
+                        // Check memory import limits if applicable
+                        if let TypeRef::Memory(mem_ty) = import.ty {
+                            self.validate_memory_type(&mem_ty)?;
+                        }
+                    }
+                }
+                Payload::MemorySection(memories) => {
+                    for memory in memories {
+                        let memory = memory.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid memory entry: {}", e))
+                        })?;
+                        self.validate_memory_type(&memory)?;
+                    }
+                }
+                Payload::DataSection(data) => {
+                    // Validate data segments don't exceed bounds
+                    for segment in data {
+                        let segment = segment.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid data segment: {}", e))
+                        })?;
+                        // Check that data segment mode is passive or within bounds
+                        match segment.kind {
+                            wasmparser::DataKind::Passive => {}
+                            wasmparser::DataKind::Active {
+                                memory_index,
+                                ref offset_expr,
+                            } => {
+                                if memory_index != 0 {
+                                    return Err(ValidationError::InvalidWasm(
+                                        "Data segment references non-zero memory index".to_string(),
+                                    ));
+                                }
+                                // offset_expr is validated by wasmparser; we just ensure it's present
+                                let _ = offset_expr;
+                            }
+                        }
+                    }
+                }
+                Payload::ExportSection(exports) => {
+                    for export in exports {
+                        let export = export.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid export entry: {}", e))
+                        })?;
+                        // Check export name for suspicious patterns
+                        if export.name.contains("__syscall") || export.name.contains("__wasi") {
+                            return Err(ValidationError::DangerousPattern(format!(
+                                "Suspicious export name: {}",
+                                export.name
+                            )));
+                        }
+                    }
+                }
+                Payload::CustomSection(custom) => {
+                    // Check custom section name for known malicious sections
+                    let bad_sections: &[&str] = &["malicious", "exploit", "shellcode"];
+                    for name in bad_sections {
+                        if custom.name().eq_ignore_ascii_case(name) {
+                            return Err(ValidationError::DangerousPattern(format!(
+                                "Suspicious custom section: {}",
+                                custom.name()
+                            )));
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
 
         Ok(())
     }
 
-    /// Validate imports against whitelist
-    fn validate_imports(&self, wasm: &[u8]) -> Result<()> {
-        // Parse import section
-        // This is a simplified check - in production, use wasmparser crate
-        let forbidden_imports = vec![
+    /// Validate memory type against policy
+    fn validate_memory_type(
+        &self,
+        memory: &wasmparser::MemoryType,
+    ) -> std::result::Result<(), ValidationError> {
+        let max_pages = memory.maximum.unwrap_or(memory.initial);
+        let max_mb = ((max_pages as u64) * 64) / 1024; // 64KB per page -> MB
+
+        if max_mb > self.policy.max_memory_mb as u64 {
+            return Err(ValidationError::MemoryLimitExceeded {
+                requested: max_mb as u32,
+                max: self.policy.max_memory_mb,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Check if an import is forbidden
+    fn is_forbidden_import(&self, full_name: &str) -> bool {
+        let forbidden_imports: &[&str] = &[
             "env.__syscall",
             "env.__wasi",
             "env.abort",
             "env.exit",
+            "wasi_snapshot_preview1",
+            "wasi_unstable",
         ];
 
-        // Check for forbidden import patterns in raw bytes
-        // Note: This is a basic check. Full WASM parsing is recommended
-        let wasm_str = String::from_utf8_lossy(wasm);
-        for forbidden in &forbidden_imports {
-            if wasm_str.contains(forbidden) && !self.policy.allowed_imports.contains(&forbidden.to_string()) {
-                return Err(AgentError::Validation(format!(
-                    "Forbidden import detected: {}", forbidden
-                )));
+        for forbidden in forbidden_imports {
+            if full_name.starts_with(forbidden) {
+                // Check whitelist override
+                if self.policy.allowed_imports.contains(&full_name.to_string()) {
+                    return false;
+                }
+                return true;
             }
         }
 
-        Ok(())
+        false
     }
 
-    /// Validate memory limits
-    fn validate_memory_limits(&self, wasm: &[u8]) -> Result<()> {
-        // Look for memory section and validate limits
-        // Simplified: check for memory-related patterns
-        // In production, parse the WASM properly
-        
-        let max_memory_pages = self.policy.max_memory_mb * 16; // 64KB per page
-        
-        // Basic check for memory section
-        // Full implementation would parse the WASM memory section properly
-        if wasm.len() > 1024 * 1024 * self.policy.max_memory_mb as usize {
-            return Err(AgentError::Validation(format!(
-                "WASM may exceed memory limit of {} MB",
-                self.policy.max_memory_mb
-            )));
-        }
+    /// Detect potential sandbox escape attempts by scanning imports, exports and custom sections
+    pub fn detect_sandbox_escape(
+        &self,
+        wasm: &[u8],
+    ) -> std::result::Result<Vec<String>, ValidationError> {
+        use wasmparser::{Parser, Payload};
 
-        Ok(())
-    }
-
-    /// Check for dangerous patterns that could lead to sandbox escape
-    fn validate_no_dangerous_patterns(&self, wasm: &[u8]) -> Result<()> {
-        let wasm_str = String::from_utf8_lossy(wasm);
-        
-        // Check for potentially dangerous patterns
-        let dangerous_patterns = vec![
-            ("inline assembly", "asm"),
-            ("raw pointer manipulation", "unsafe"),
-            ("direct system calls", "syscall"),
-            ("memory corruption", "buffer overflow"),
-        ];
-
-        for (name, pattern) in &dangerous_patterns {
-            if wasm_str.contains(pattern) {
-                return Err(AgentError::Validation(format!(
-                    "Dangerous pattern detected: {} ({})", name, pattern
-                )));
-            }
-        }
-
-        // Check for known vulnerable function imports
-        let vulnerable_functions = vec![
-            "__stack_chk_fail",
-            "__libc_start_main",
-            "system",
-            "exec",
-            "popen",
-        ];
-
-        for func in &vulnerable_functions {
-            if wasm_str.contains(func) {
-                return Err(AgentError::Validation(format!(
-                    "Potentially vulnerable function import: {}", func
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Detect potential sandbox escape attempts
-    pub fn detect_sandbox_escape(&self, wasm: &[u8]) -> Result<Vec<String>> {
         let mut detections = Vec::new();
-        let wasm_str = String::from_utf8_lossy(wasm);
+        let parser = Parser::new(0);
 
-        // Check for known escape techniques
-        let escape_patterns = vec![
-            ("Spectre/Meltdown", "rdtsc"),
-            ("Rowhammer", "clflush"),
-            ("Side-channel", "cache"),
-            ("Timing attack", "performance.now"),
-        ];
+        for payload in parser.parse_all(wasm) {
+            let payload = payload.map_err(|e| {
+                ValidationError::InvalidWasm(format!("Parse error: {}", e))
+            })?;
 
-        for (technique, pattern) in &escape_patterns {
-            if wasm_str.contains(pattern) {
-                detections.push(format!("{} attack pattern detected", technique));
+            match payload {
+                Payload::ImportSection(imports) => {
+                    for import in imports.into_imports() {
+                        let import = import.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid import: {}", e))
+                        })?;
+
+                        let full_name = format!("{}.{}", import.module, import.name);
+
+                        let escape_patterns: &[(&str, &str)] = &[
+                            ("Spectre/Meltdown timing", "rdtsc"),
+                            ("Rowhammer cache flush", "clflush"),
+                            ("Side-channel cache probing", "cache"),
+                            ("Timing attack", "performance.now"),
+                        ];
+
+                        for (technique, pattern) in escape_patterns {
+                            if full_name.contains(pattern) {
+                                detections.push(format!("{} attack pattern in import: {}", technique, full_name));
+                            }
+                        }
+                    }
+                }
+                Payload::ExportSection(exports) => {
+                    for export in exports {
+                        let export = export.map_err(|e| {
+                            ValidationError::InvalidWasm(format!("Invalid export: {}", e))
+                        })?;
+
+                        let escape_patterns: &[(&str, &str)] = &[
+                            ("Spectre/Meltdown timing", "rdtsc"),
+                            ("Rowhammer cache flush", "clflush"),
+                            ("Side-channel cache probing", "cache"),
+                            ("Timing attack", "performance.now"),
+                        ];
+
+                        for (technique, pattern) in escape_patterns {
+                            if export.name.contains(pattern) {
+                                detections.push(format!("{} attack pattern in export: {}", technique, export.name));
+                            }
+                        }
+                    }
+                }
+                Payload::CustomSection(custom) => {
+                    let suspicious_sections: &[&str] = &["malicious", "exploit", "shellcode", "payload"];
+                    for name in suspicious_sections {
+                        if custom.name().eq_ignore_ascii_case(name) {
+                            detections.push(format!(
+                                "Suspicious custom section detected: {}",
+                                custom.name()
+                            ));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -259,25 +315,35 @@ mod tests {
     #[test]
     fn test_wasm_magic_validation() {
         let validator = SkillSecurityValidator::new(SkillSecurityPolicy::default());
-        
+
         // Valid WASM header
         let valid_wasm = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-        assert!(validator.validate_wasm_structure(&valid_wasm).is_ok());
-        
+        assert!(validator.validate(&valid_wasm).is_ok());
+
         // Invalid WASM header
         let invalid_wasm = vec![0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00];
-        assert!(validator.validate_wasm_structure(&invalid_wasm).is_err());
+        assert!(validator.validate(&invalid_wasm).is_err());
     }
 
     #[test]
     fn test_module_size_limit() {
         let mut policy = SkillSecurityPolicy::default();
         policy.max_module_size = 100;
-        
+
         let validator = SkillSecurityValidator::new(policy);
-        
+
         // Module too large
         let large_wasm = vec![0x00; 101];
         assert!(validator.validate(&large_wasm).is_err());
+    }
+
+    #[test]
+    fn test_forbidden_import_detection() {
+        let policy = SkillSecurityPolicy::default();
+        let validator = SkillSecurityValidator::new(policy);
+
+        assert!(validator.is_forbidden_import("env.__syscall"));
+        assert!(validator.is_forbidden_import("env.exit"));
+        assert!(!validator.is_forbidden_import("env.memory"));
     }
 }

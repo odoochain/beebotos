@@ -1,4 +1,4 @@
-# Skill: Health Advisor
+# Health Advisor
 
 ## Description
 

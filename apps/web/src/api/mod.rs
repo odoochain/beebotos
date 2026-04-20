@@ -36,12 +36,15 @@ pub use client::{
 
 // Re-export 服务
 pub use services::{
-    AgentInfo, AgentService, AgentStatus, ApiService, AssetInfo, AuthService, ChannelConfig,
-    ChannelInfo, ChannelService, ChannelStatus, CreateAgentRequest, CreateProposalRequest,
-    DaoService, DaoSummary, LoginResponse, ProposalInfo, ProposalStatus, QrStatusResponse,
-    Settings, SettingsService, SkillCategory, SkillInfo, SkillService, TestConnectionResponse,
-    Theme, TokenRefreshResponse, TransactionInfo, TransactionStatus, TransactionType,
-    TreasuryInfo, TreasuryService, UpdateAgentRequest, UserInfo, WeChatQrResponse,
+    AgentInfo, AgentLogEntry, AgentService, AgentStatus, ApiService, AssetInfo, AuthService,
+    ChannelConfig, ChannelInfo, ChannelService, ChannelStatus, CreateAgentRequest,
+    CreateInstanceRequest, CreateProposalRequest, DaoService, DaoSummary, ExecuteSkillResponse,
+    InstanceInfo, InstallSkillRequest, InstallSkillResponse, LoginResponse, LlmConfigService,
+    LlmGlobalConfig, LlmHealthResponse, LlmLatency, LlmMetricsResponse, LlmProviderConfig,
+    LlmProviderHealth, LlmSummary, LlmTokens, PaginatedResponse, ProposalInfo, ProposalStatus,
+    QrStatusResponse, Settings, SettingsService, SkillCategory, SkillInfo, SkillService,
+    TestConnectionResponse, Theme, TokenRefreshResponse, TransactionInfo, TransactionStatus,
+    TransactionType, TreasuryInfo, TreasuryService, UpdateAgentRequest, UserInfo, WeChatQrResponse,
 };
 
 /// 创建默认 API 客户端

@@ -1,4 +1,4 @@
-# Rust Developer Skill
+# Rust Developer
 
 ## Overview
 

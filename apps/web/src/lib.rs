@@ -54,7 +54,7 @@ use components::{AuthGuard, ContentSecurityPolicy, GlobalErrorHandler, Sidebar};
 use i18n::{init_i18n, I18nContext};
 use leptos_router::hooks::use_location;
 use pages::{
-    AgentDetail, AgentsPage, ChannelsPage, DaoPage, Home, LoginPage, NotFound, RegisterPage, SettingsPage, SkillsPage, TreasuryPage,
+    AgentDetail, AgentsPage, ChannelsPage, DaoPage, Home, LlmConfigPage, LoginPage, NotFound, RegisterPage, SettingsPage, SkillInstancesPage, SkillsPage, TreasuryPage,
 };
 use state::provide_app_state;
 use utils::provide_theme;
@@ -72,8 +72,10 @@ fn PageTitle() -> impl IntoView {
             p if p.starts_with("/channels") => i18n.t("nav-channels"),
             p if p.starts_with("/dao/treasury") => i18n.t("nav-treasury"),
             p if p.starts_with("/dao") => i18n.t("nav-dao"),
+            p if p.starts_with("/skill-instances") => i18n.t("nav-skill-instances"),
             p if p.starts_with("/skills") => i18n.t("nav-skills"),
             p if p.starts_with("/settings") => i18n.t("nav-settings"),
+            p if p.starts_with("/llm-config") => i18n.t("nav-llm-config"),
             p if p.starts_with("/browser") => i18n.t("nav-browser"),
             p if p.starts_with("/chat") => i18n.t("nav-chat"),
             _ => i18n.t("nav-home"),
@@ -209,6 +211,14 @@ pub fn App() -> impl IntoView {
                                         </AuthGuard>
                                     }
                                 />
+                                <Route
+                                    path=StaticSegment("skill-instances")
+                                    view=move || view! {
+                                        <AuthGuard>
+                                            <SkillInstancesPage />
+                                        </AuthGuard>
+                                    }
+                                />
 
                                 // 频道管理
                                 <Route
@@ -226,6 +236,15 @@ pub fn App() -> impl IntoView {
                                     view=move || view! {
                                         <AuthGuard>
                                             <SettingsPage />
+                                        </AuthGuard>
+                                    }
+                                />
+                                // LLM 配置监控
+                                <Route
+                                    path=StaticSegment("llm-config")
+                                    view=move || view! {
+                                        <AuthGuard>
+                                            <LlmConfigPage />
                                         </AuthGuard>
                                     }
                                 />

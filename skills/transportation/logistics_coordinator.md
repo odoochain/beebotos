@@ -1,4 +1,4 @@
-# Skill: Logistics Coordinator
+# Logistics Coordinator
 
 ## Description
 

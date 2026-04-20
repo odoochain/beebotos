@@ -171,17 +171,17 @@ pub async fn update_title(
     user: AuthUser,
     Path(id): Path<String>,
     Json(req): Json<UpdateTitleRequest>,
-) -> Result<StatusCode, GatewayError> {
+) -> Result<Json<SessionResponse>, GatewayError> {
     require_any_role(&user, &["user", "admin"])?;
 
-    state
+    let session = state
         .webchat_service
         .as_ref()
         .ok_or_else(|| GatewayError::internal("Webchat service not initialized"))?
         .update_title(&id, &user.user_id, &req.title)
         .await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(SessionResponse::from(session)))
 }
 
 /// Toggle pin status
@@ -207,7 +207,7 @@ pub async fn archive_session(
     State(state): State<Arc<AppState>>,
     user: AuthUser,
     Path(id): Path<String>,
-) -> Result<StatusCode, GatewayError> {
+) -> Result<Json<serde_json::Value>, GatewayError> {
     require_any_role(&user, &["user", "admin"])?;
 
     state
@@ -217,5 +217,237 @@ pub async fn archive_session(
         .archive_session(&id, &user.user_id)
         .await?;
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({ "success": true, "message": "Session archived" })))
+}
+
+/// Clear all messages in a session
+pub async fn clear_messages(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let result = sqlx::query("DELETE FROM chat_messages WHERE session_id = ?1")
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| GatewayError::internal(format!("Failed to clear messages: {}", e)))?;
+
+    Ok(Json(json!({
+        "success": true,
+        "message": "Messages cleared",
+        "session_id": id,
+        "deleted_count": result.rows_affected(),
+    })))
+}
+
+/// Get usage statistics for the authenticated user
+pub async fn get_usage(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let total_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM chat_sessions WHERE user_id = ?1"
+    )
+    .bind(&user.user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let total_messages: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM chat_messages m JOIN chat_sessions s ON m.session_id = s.id WHERE s.user_id = ?1"
+    )
+    .bind(&user.user_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+
+    // Upsert today's usage record
+    let _ = sqlx::query(
+        "INSERT INTO webchat_usage_daily (user_id, date, session_count, message_count)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(user_id, date) DO UPDATE SET
+         session_count = excluded.session_count,
+         message_count = excluded.message_count"
+    )
+    .bind(&user.user_id)
+    .bind(&today)
+    .bind(total_sessions)
+    .bind(total_messages)
+    .execute(&state.db)
+    .await;
+
+    let daily: Vec<serde_json::Value> = sqlx::query_as::<_, UsageRow>(
+        "SELECT date, session_count, message_count, input_tokens, output_tokens
+         FROM webchat_usage_daily WHERE user_id = ?1 ORDER BY date DESC LIMIT 30"
+    )
+    .bind(&user.user_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|r| json!({
+        "date": r.date,
+        "session_count": r.session_count,
+        "message_count": r.message_count,
+        "input_tokens": r.input_tokens,
+        "output_tokens": r.output_tokens,
+    }))
+    .collect();
+
+    Ok(Json(json!({
+        "total_sessions": total_sessions,
+        "total_messages": total_messages,
+        "daily": daily,
+    })))
+}
+
+#[derive(sqlx::FromRow)]
+struct UsageRow {
+    date: String,
+    session_count: i64,
+    message_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+}
+
+/// Side question request
+#[derive(Debug, Deserialize)]
+pub struct SideQuestionRequest {
+    pub session_id: String,
+    pub question: String,
+}
+
+/// Create a side question (stub — stores question for later answering)
+pub async fn create_side_question(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<SideQuestionRequest>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let id = uuid::Uuid::new_v4().to_string();
+
+    sqlx::query(
+        "INSERT INTO webchat_side_questions (id, session_id, user_id, question, status)
+         VALUES (?1, ?2, ?3, ?4, 'pending')"
+    )
+    .bind(&id)
+    .bind(&req.session_id)
+    .bind(&user.user_id)
+    .bind(&req.question)
+    .execute(&state.db)
+    .await
+    .map_err(|e| GatewayError::internal(format!("Failed to create side question: {}", e)))?;
+
+    Ok(Json(json!({
+        "id": id,
+        "question": req.question,
+        "status": "pending",
+        "message": "Side question created",
+    })))
+}
+
+/// Export a session as JSON
+pub async fn export_session(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let session = state
+        .webchat_service
+        .as_ref()
+        .ok_or_else(|| GatewayError::internal("Webchat service not initialized"))?
+        .get_session(&id, &user.user_id)
+        .await?;
+
+    let messages = state
+        .webchat_service
+        .as_ref()
+        .unwrap()
+        .get_messages(&id, &user.user_id)
+        .await?;
+
+    Ok(Json(json!({
+        "session": {
+            "id": session.id,
+            "title": session.title,
+            "channel": session.channel,
+            "is_pinned": session.is_pinned,
+            "is_archived": session.is_archived,
+            "created_at": session.created_at.to_rfc3339(),
+            "updated_at": session.updated_at.to_rfc3339(),
+        },
+        "messages": messages.into_iter().map(|m| json!({
+            "id": m.id,
+            "role": m.role,
+            "content": m.content,
+            "metadata": m.metadata,
+            "created_at": m.created_at.to_rfc3339(),
+        })).collect::<Vec<_>>(),
+        "export_version": "1.0",
+    })))
+}
+
+/// Import session request
+#[derive(Debug, Deserialize)]
+pub struct ImportSessionRequest {
+    pub data: serde_json::Value,
+}
+
+/// Import a session from JSON
+pub async fn import_session(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Json(req): Json<ImportSessionRequest>,
+) -> Result<impl IntoResponse, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let session_data = req.data.get("session")
+        .ok_or_else(|| GatewayError::bad_request("Missing 'session' field in import data"))?;
+
+    let title = session_data.get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Imported Chat");
+
+    let channel = session_data.get("channel")
+        .and_then(|v| v.as_str())
+        .unwrap_or("webchat");
+
+    let session = state
+        .webchat_service
+        .as_ref()
+        .ok_or_else(|| GatewayError::internal("Webchat service not initialized"))?
+        .create_session(&user.user_id, channel, title)
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(SessionResponse::from(session))))
+}
+
+/// Send a streaming message (stub — returns a stream ID)
+pub async fn send_message_streaming(
+    State(state): State<Arc<AppState>>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, GatewayError> {
+    require_any_role(&user, &["user", "admin"])?;
+
+    let stream_id = format!("stream_{}", uuid::Uuid::new_v4());
+
+    info!("Streaming message request for session {} (stub)", id);
+
+    Ok(Json(json!({
+        "stream_id": stream_id,
+        "status": "started",
+        "message": "Streaming endpoint is a stub. Use regular message send for now.",
+        "session_id": id,
+    })))
 }

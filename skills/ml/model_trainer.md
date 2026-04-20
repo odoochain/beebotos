@@ -1,4 +1,4 @@
-# Skill: Model Trainer
+# Model Trainer
 
 ## Description
 
