@@ -221,6 +221,18 @@ pack_release() {
         fi
         cp "${PROJECT_ROOT}/target/release/web-server" "${out_dir}/"
         cp -r "${PROJECT_ROOT}/apps/web/pkg/." "${out_dir}/pkg/"
+
+        # 复制 web 入口页面和静态资源
+        cp "${PROJECT_ROOT}/apps/web/index.html" "${out_dir}/"
+        cp -rL "${PROJECT_ROOT}/apps/web/style" "${out_dir}/"
+        cp -r "${PROJECT_ROOT}/apps/web/public" "${out_dir}/"
+
+        # 复制根目录下的软链接文件（style.css -> style/main.css 等）
+        for link_file in style.css components.css favicon.svg; do
+            if [[ -L "${PROJECT_ROOT}/apps/web/${link_file}" ]]; then
+                cp -L "${PROJECT_ROOT}/apps/web/${link_file}" "${out_dir}/${link_file}"
+            fi
+        done
     fi
     if [[ "$target" == "all" || "$target" == "beehub" ]]; then
         if [[ -f "${PROJECT_ROOT}/target/release/beehub" ]]; then
