@@ -293,6 +293,11 @@ function Pack-Release($target = "all") {
 
     if (Test-Path (Join-Path $ProjectRoot "config")) {
         Copy-Item -Recurse (Join-Path $ProjectRoot "config") $outDir
+        # 调整 web-server 生产配置：静态文件路径指向当前目录
+        $prodConfig = Join-Path $outDir "config\web-server.toml"
+        if (Test-Path $prodConfig) {
+            (Get-Content $prodConfig) -replace 'path = "apps/web"', 'path = "."' | Set-Content $prodConfig -Encoding UTF8
+        }
     }
 
     Copy-Item (Join-Path $ProjectRoot "scripts\beebotos-run.ps1") $outDir

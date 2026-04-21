@@ -62,7 +62,7 @@ function Start-ServiceByName($name) {
     $pidFile = Join-Path $RunDir "$name.pid"
     $procArgs = @()
     if ($name -eq "web") {
-        $procArgs = @("--static-path", ".")
+        $procArgs = @("--config", "config\web-server.toml", "--static-path", ".")
     }
     $proc = Start-Process -FilePath $binaryPath -ArgumentList $procArgs `
         -RedirectStandardOutput $logFile -RedirectStandardError $errFile `
